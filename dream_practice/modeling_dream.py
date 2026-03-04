@@ -32,7 +32,7 @@ from transformers.modeling_outputs import (
     BaseModelOutput,
     MaskedLMOutput,
 )
-
+from QEfficient.diffusers.models.modeling_utils import compute_blocked_attention, get_attention_blocking_config
 from QEfficient.utils.constants import MIN_MASKED_ATTENTION_VALUE
 
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
@@ -79,7 +79,6 @@ class DreamRMSNorm(nn.Module):
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
-
 
 # Copied from transformers.models.llama.modeling_llama.LlamaRotaryEmbedding with Llama->Dream
 class DreamRotaryEmbedding(nn.Module):
@@ -173,7 +172,78 @@ class DreamRotaryEmbedding(nn.Module):
         sin = sin * self.attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+    
+def _non_meta_init_device(config) -> torch.device:
+    if config.init_device is not None and config.init_device != "meta":
+        return torch.device(config.init_device)
+    else:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def qeff_apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+    """Applies Rotary Position Embedding to the query and key tensors.
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`):
+            The position indices of the tokens corresponding to the query and key tensors. For example, this can be
+            used to pass offsetted position ids when working with a KV-cache.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    # print(q.shape, cos.shape)
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    # Cast back to original dtype
+    return q_embed.to(q.dtype), k_embed.to(k.dtype)
+
+class QEffDreamRotaryEmbedding(nn.Module):
+    """
+    The only differences are:
+    - Add static sin/cos computations.
+    """
+
+    def __init__(self, config, device=None):
+        super().__init__()
+        dim = config.hidden_size // config.num_attention_heads
+        self.inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, dim, 2, device=device, dtype=torch.float) / dim))
+        self.original_max_seq_len = config.max_position_embeddings or config.max_sequence_length
+        self._set_cos_sin_cache(
+            seq_len=self.original_max_seq_len, device=self.inv_freq.device, dtype=torch.get_default_dtype()
+        )
+
+    def _set_cos_sin_cache(self, seq_len, device, dtype):
+        self.max_seq_len_cached = seq_len
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
+
+        freqs = torch.outer(t, self.inv_freq)
+
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+
+    def forward(self, x, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        # print(self.cos_cached.size())
+        # print(seq_len, self.max_seq_len_cached)
+        # if seq_len > self.max_seq_len_cached:
+        #     self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+
+        return (
+            self.cos_cached[:seq_len].to(dtype=x.dtype),
+            self.sin_cached[:seq_len].to(dtype=x.dtype),
+        )
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
 def rotate_half(x):
@@ -255,6 +325,8 @@ class DreamAttention(nn.Module):
                 "to errors during the forward call, if caching is used. Please make sure to provide a `layer_idx` "
                 "when creating this class."
             )
+        #ADDED HERE
+        self.compile_length = config.max_position_embeddings
 
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
@@ -276,7 +348,9 @@ class DreamAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=True)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-        self.rotary_emb = DreamRotaryEmbedding(config=self.config)
+        #ADDED HERE
+        self.rotary_emb = QEffDreamRotaryEmbedding(config=self.config)
+        # self.rotary_emb = DreamRotaryEmbedding(config=self.config)
 
     def forward(
         self,
@@ -306,11 +380,12 @@ class DreamAttention(nn.Module):
                 "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
                 "removed and `position_embeddings` will be mandatory."
             )
-            cos, sin = self.rotary_emb(value_states, position_ids)
+            cos, sin = self.rotary_emb(value_states, self.compile_length)
         else:
             cos, sin = position_embeddings
         #ADDED HERE
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states, key_states = qeff_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
@@ -323,13 +398,13 @@ class DreamAttention(nn.Module):
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         #ADDED HERE
         
-        # if attention_mask is not None:
-        #     attn_weights = torch.where(
-        #         attention_mask, torch.tensor(MIN_MASKED_ATTENTION_VALUE, dtype=torch.float32), attn_weights
-        # )
-        # if attention_mask is not None:  # no matter the length, we just slice it
-        #     causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        #     attn_weights = attn_weights + causal_mask
+        if attention_mask is not None:
+            attn_weights = torch.where(
+                attention_mask, torch.tensor(MIN_MASKED_ATTENTION_VALUE, dtype=torch.float32), attn_weights
+        )
+        if attention_mask is not None:  # no matter the length, we just slice it
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+            attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
@@ -403,10 +478,11 @@ class DreamSdpaAttention(DreamAttention):
                 "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
                 "removed and `position_embeddings` will be mandatory."
             )
-            cos, sin = self.rotary_emb(value_states, position_ids)
+            cos, sin = self.rotary_emb(value_states, q_len)
         else:
             cos, sin = position_embeddings
         #ADDED HERE
+        query_states, key_states = qeff_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
         # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
@@ -415,6 +491,8 @@ class DreamSdpaAttention(DreamAttention):
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
+        #ADDED HERE
+        attention_mask = attention_mask.bool()
 
         # causal_mask = attention_mask
         # if attention_mask is not None:  # no matter the length, we just slice it
@@ -426,9 +504,12 @@ class DreamSdpaAttention(DreamAttention):
             query_states = query_states.contiguous()
             key_states = key_states.contiguous()
             value_states = value_states.contiguous()
+
         #ADDED HERE
-        attention_mask = attention_mask.bool()
-        print(attention_mask)
+        query_states = query_states.contiguous()
+        key_states = key_states.contiguous()
+        value_states = value_states.contiguous()
+        # print(attention_mask)
 
         # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
         # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
@@ -448,7 +529,118 @@ class DreamSdpaAttention(DreamAttention):
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
         #ADDED Here
-        attn_output = hidden_states
+        # attn_output = hidden_states
+
+        return attn_output, None, past_key_value
+
+class DreamBlockedAttention(DreamAttention):
+    """
+    Dream attention module using torch.nn.functional.scaled_dot_product_attention. This module inherits from
+    `DreamAttention` as the weights of the module stays untouched. The only changes are on the forward pass to adapt to
+    SDPA API.
+    """
+
+    # Adapted from DreamAttention.forward
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if output_attentions:
+            # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
+            logger.warning_once(
+                "DreamModel is using DreamSdpaAttention, but `torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to the manual attention implementation, "
+                'but specifying the manual implementation will be required from Transformers version v5.0.0 onwards. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+            )
+            return super().forward(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_value,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+        bsz, q_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+        if position_embeddings is None:
+            logger.warning_once(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
+            )
+            cos, sin = self.rotary_emb(value_states, q_len)
+        else:
+            cos, sin = position_embeddings
+        #ADDED HERE
+        query_states, key_states = qeff_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        #ADDED HERE
+        attention_mask = attention_mask.bool()
+
+        # causal_mask = attention_mask
+        # if attention_mask is not None:  # no matter the length, we just slice it
+        #     causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+
+        # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+        # Reference: https://github.com/pytorch/pytorch/issues/112577.
+        if query_states.device.type == "cuda" and attention_mask is not None:
+            query_states = query_states.contiguous()
+            key_states = key_states.contiguous()
+            value_states = value_states.contiguous()
+
+        #ADDED HERE
+        query_states = query_states.contiguous()
+        key_states = key_states.contiguous()
+        value_states = value_states.contiguous()
+        blocking_mode, head_block_size, num_kv_blocks, num_q_blocks = get_attention_blocking_config()
+        # Apply blocking using pipeline_utils
+        attn_output = compute_blocked_attention(
+            query_states,
+            key_states,
+            value_states,
+            blocking_mode=blocking_mode,
+            head_block_size=head_block_size,
+            num_kv_blocks=num_kv_blocks,
+            num_q_blocks=num_q_blocks,
+            attention_mask=attention_mask,
+        )
+        attn_output_1 = torch.nn.functional.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            is_causal=False, # hard coded
+        )
+        print('Blocked vs unblocked diff: ', (attn_output - attn_output_1).abs().max())
+
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(bsz, q_len, self.hidden_size)
+        attn_output = self.o_proj(attn_output)
+        #ADDED Here
+        # attn_output = hidden_states
 
         return attn_output, None, past_key_value
 
@@ -466,6 +658,7 @@ class DreamDecoderLayer(nn.Module):
         
         # self.self_attn = Dream_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
         self.self_attn = DreamSdpaAttention(config, layer_idx)
+        # self.self_attn = DreamBlockedAttention(config, layer_idx)
 
         self.mlp = DreamMLP(config)
         self.input_layernorm = DreamRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -633,7 +826,10 @@ class DreamBaseModel(DreamPreTrainedModel):
         )
         self._attn_implementation = config._attn_implementation
         self.norm = DreamRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.rotary_emb = DreamRotaryEmbedding(config=config)
+        #ADDED HERE
+        self.max_position_embeddings = config.max_position_embeddings
+        self.rotary_emb = QEffDreamRotaryEmbedding(config=config)
+        # self.rotary_emb = DreamRotaryEmbedding(config=config)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
@@ -681,7 +877,6 @@ class DreamBaseModel(DreamPreTrainedModel):
         
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
-            print('In cache')
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
@@ -691,11 +886,16 @@ class DreamBaseModel(DreamPreTrainedModel):
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
+            #ADDED HERE
+            # position_ids = torch.arange(0, self.max_position_embeddings, device=inputs_embeds.device)
 
         hidden_states = inputs_embeds
 
         # create position embeddings to be shared across the decoder layers
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        # position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        #ADDED HERE
+        position_embeddings = None #self.rotary_emb(hidden_states, self.max_position_embeddings)
+        # position_embeddings = self.rotary_emb(hidden_states, self.max_position_embeddings)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -817,6 +1017,7 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -836,7 +1037,7 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         #ADDED HERE
         # logits = self.lm_head(hidden_states)
-        logits = self.lm_head(hidden_states[:, -0:, :])
+        logits = self.lm_head(hidden_states[:, -0:, :]).float()
         # print(num_logits_to_keep, hidden_states.shape, logits.shape)
         # logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
 
