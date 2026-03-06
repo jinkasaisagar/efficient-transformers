@@ -33,6 +33,7 @@ def get_attention_blocking_config():
     if mode not in valid_modes:
         raise ValueError(f"Invalid ATTENTION_BLOCKING_MODE: {mode}. Must be one of {valid_modes}")
 
+    # print('In get_attention_blocking', mode, head_block_size, num_kv_blocks, num_q_blocks)
     return mode, head_block_size, num_kv_blocks, num_q_blocks
 
 
@@ -127,7 +128,11 @@ def apply_kv_blocking(
     Returns:
         torch.FloatTensor: Attention output of shape (BS, NH, CL, DH)
     """
+    print(num_kv_blocks, q.shape)
+
+    # import pdb; pdb.set_trace()
     BS, NH, CL, DH = q.shape
+    # import pdb; pdb.set_trace()
     scale_factor = 1.0 / math.sqrt(DH)
 
     # Get blocking configuration
@@ -173,6 +178,7 @@ def apply_kv_blocking(
             else:
                 real_kv_len = block_positions[kv_block_idx + 1] - ki
 
+            # print('kv_block_idx ',kv_block_idx, real_kv_len, ki)
             k_block = k_g[:, :, ki : ki + real_kv_len, :]
             v_block = v_g[:, :, ki : ki + real_kv_len, :]
 
@@ -446,6 +452,7 @@ def compute_blocked_attention(
     Returns:
         torch.FloatTensor: Attention output of shape (BS, NH, CL, DH)
     """
+    print(blocking_mode)
     if blocking_mode == "kv":
         return apply_kv_blocking(q, k, v, head_block_size, num_kv_blocks, attention_mask)
     elif blocking_mode == "q":

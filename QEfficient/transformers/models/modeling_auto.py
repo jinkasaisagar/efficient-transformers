@@ -16,6 +16,7 @@ from transformers import __version__
 import numpy as np
 import torch
 import torch.nn as nn
+import time
 from transformers import (
     AutoImageProcessor,
     AutoModel,
@@ -453,7 +454,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         """
         return self.model.config.__dict__
 
-    def export(self, export_dir: Optional[str] = None, **kwargs) -> str:
+    def export(self, sample_seq_len, export_dir: Optional[str] = None, **kwargs) -> str:
         """
         Export the model to ONNX format using ``torch.onnx.export``.
 
@@ -474,7 +475,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             Path to the generated ONNX graph file.
         """
         bs = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
-        seq_len = constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
+        seq_len = sample_seq_len# constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
 
         example_inputs = {
             "input_ids": torch.zeros((bs, seq_len), dtype=torch.int64),
@@ -871,6 +872,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         input_ids = inputs
         device = input_ids.device
         attention_mask = kwargs.pop("attention_mask", None)
+        print(attention_mask)
         self._prepare_special_tokens(generation_config, device=device)
 
         # 3. Prepare `max_length`.
@@ -913,6 +915,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         )
 
         result = self._sample(
+            start_time,
             input_ids,
             attention_mask=attention_mask,
             generation_config=generation_config,
@@ -927,6 +930,7 @@ class QEFFAutoModel(QEFFTransformersBase):
 
     def _sample(
         self,
+        start_time,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
         generation_config: DreamGenerationConfig,
@@ -982,15 +986,15 @@ class QEFFAutoModel(QEFFTransformersBase):
         
         for i in range(steps):
             # x = x.numpy()
-            print(x.shape, attention_mask.shape, attention_mask.dtype, x.dtype)
-            x.tofile('input_id.raw')
-            attention_mask.tofile('attention_mask.raw')
-            exit()
+            # print(x.shape, attention_mask.shape, attention_mask.dtype, x.dtype)
+            # x.tofile('input_id.raw')
+            # attention_mask.tofile('attention_mask.raw')
+            # exit()
             inputs = dict(input_ids=x, attention_mask=attention_mask)
             mask_index = (inputs['input_ids'] == mask_token_id)
             
             outputs = {
-                "logits": np.random.randn(*list(qpc_session.bindings[2].dims)).astype(np.float32),
+                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.float32),
             }
             outputs = {k: v.numpy() if isinstance(v, torch.Tensor) else v for k, v in outputs.items()}  
             qpc_session.set_buffers(outputs)
@@ -1026,7 +1030,7 @@ class QEFFAutoModel(QEFFTransformersBase):
                     raise RuntimeError(f"Unknown alg: {alg}")
                 num_mask_token = mask_index.sum() / mask_index.shape[0]
                 number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else int(num_mask_token)
-                number_transfer_tokens = 2
+                # number_transfer_tokens = 2
                 print(i,number_transfer_tokens)
                 full_confidence = torch.full_like(torch.tensor(inputs['input_ids']), -torch.inf, dtype=logits.dtype)
                 full_confidence[mask_index] = confidence
@@ -1047,6 +1051,11 @@ class QEFFAutoModel(QEFFTransformersBase):
 
             if histories is not None:
                 histories.append(x.clone())
+            end_time_iter = time.perf_counter()
+            total_time_iter = end_time_iter - start_time
+            average_time = total_time_iter / (i+1)
+            print(f'Avg time till iteration %d is %f',i,average_time)
+        
         x = torch.tensor(x)
 
         if return_dict_in_generate:
