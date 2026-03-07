@@ -913,9 +913,19 @@ class QEFFAutoModel(QEFFTransformersBase):
             input_ids=input_ids,
             attention_mask=attention_mask 
         )
+        qpc_path = generation_config.qpc_path
+        device_ids = generation_config.device_ids
+        qpc_session = QAICInferenceSession(str(qpc_path), device_ids=device_ids)
+        outputs = {
+                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.float32),
+            }
+        outputs = {k: v.numpy() if isinstance(v, torch.Tensor) else v for k, v in outputs.items()}  
+        qpc_session.set_buffers(outputs)
+            
 
         result = self._sample(
             start_time,
+            qpc_session,
             input_ids,
             attention_mask=attention_mask,
             generation_config=generation_config,
@@ -931,6 +941,7 @@ class QEFFAutoModel(QEFFTransformersBase):
     def _sample(
         self,
         start_time,
+        qpc_session,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
         generation_config: DreamGenerationConfig,
@@ -982,7 +993,6 @@ class QEFFAutoModel(QEFFTransformersBase):
         x = x.numpy()
         attention_mask = F.pad(attention_mask, (0, compile_length - attention_mask.shape[1]), value=0.0)
         attention_mask = attention_mask.numpy()
-        qpc_session = QAICInferenceSession(str(qpc_path), device_ids=device_ids)
         
         for i in range(steps):
             # x = x.numpy()
@@ -990,17 +1000,15 @@ class QEFFAutoModel(QEFFTransformersBase):
             # x.tofile('input_id.raw')
             # attention_mask.tofile('attention_mask.raw')
             # exit()
+
+            start_time_iter = time.perf_counter()
             inputs = dict(input_ids=x, attention_mask=attention_mask)
             mask_index = (inputs['input_ids'] == mask_token_id)
             
-            outputs = {
-                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.float32),
-            }
-            outputs = {k: v.numpy() if isinstance(v, torch.Tensor) else v for k, v in outputs.items()}  
-            qpc_session.set_buffers(outputs)
             # print(inputs)
             logits = qpc_session.run(inputs)['logits']
             logits = torch.tensor(logits)
+            logits_time_iter = time.perf_counter()
 
             # logits = self(x, attention_mask, tok_idx).logits
             logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
@@ -1053,8 +1061,12 @@ class QEFFAutoModel(QEFFTransformersBase):
                 histories.append(x.clone())
             end_time_iter = time.perf_counter()
             total_time_iter = end_time_iter - start_time
+            total_time_network = logits_time_iter - start_time_iter
+            total_time_postprocess = end_time_iter - logits_time_iter
             average_time = total_time_iter / (i+1)
             print(f'Avg time till iteration %d is %f',i,average_time)
+            print(f'    time only network is %f',i,total_time_network)
+            print(f'    time only postprocess is %f',i,total_time_postprocess)
         
         x = torch.tensor(x)
 
