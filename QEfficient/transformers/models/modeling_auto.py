@@ -491,6 +491,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             output_names,
             dynamic_axes,
             export_dir=export_dir,
+            verbose=True,
             use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
         )
 
@@ -867,6 +868,8 @@ class QEFFAutoModel(QEFFTransformersBase):
         generation_logits_hook_func = kwargs.pop("generation_logits_hook_func", lambda step, x, logits: logits)
         import time
         start_time = time.perf_counter()
+        # print(generation_config)
+        # exit()
         # 2. Define model inputs
         assert inputs is not None
         input_ids = inputs
@@ -916,8 +919,11 @@ class QEFFAutoModel(QEFFTransformersBase):
         qpc_path = generation_config.qpc_path
         device_ids = generation_config.device_ids
         qpc_session = QAICInferenceSession(str(qpc_path), device_ids=device_ids)
+        # outputs = {
+        #         "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.float32),
+        #     }
         outputs = {
-                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.float32),
+                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.int64),
             }
         outputs = {k: v.numpy() if isinstance(v, torch.Tensor) else v for k, v in outputs.items()}  
         qpc_session.set_buffers(outputs)
@@ -1003,70 +1009,16 @@ class QEFFAutoModel(QEFFTransformersBase):
 
             start_time_iter = time.perf_counter()
             inputs = dict(input_ids=x, attention_mask=attention_mask)
-            mask_index = (inputs['input_ids'] == mask_token_id)
+            # mask_index = (inputs['input_ids'] == mask_token_id)
             
             # print(inputs)
-            logits = qpc_session.run(inputs)['logits']
-            logits = torch.tensor(logits)
-            logits_time_iter = time.perf_counter()
-
-            # logits = self(x, attention_mask, tok_idx).logits
-            logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
-
-            # this allows user-defined logits control of the intermediate steps
-            logits = generation_logits_hook_func(i, x, logits)
-
-
-            mask_logits = logits[mask_index]
-            t = timesteps[i]
-            s = timesteps[i + 1]
-        
-            if alg == 'origin':
-                p_transfer = 1 - s / t if i < steps - 1 else 1
-                x0 = torch.zeros_like(x[mask_index], device=self.device, dtype=torch.long) + mask_token_id
-                transfer_index_t_s = torch.rand(*x0.shape, device=self.device) < p_transfer
-                _, x0[transfer_index_t_s]= sample_tokens(mask_logits[transfer_index_t_s], temperature=temperature, top_p=top_p, top_k=top_k)
-                x[mask_index] = x0.clone()
-            else:
-                if alg == 'maskgit_plus':
-                    confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k)
-                elif alg == 'topk_margin':
-                    confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True)
-                elif alg == 'entropy':
-                    confidence, x0 = sample_tokens(mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True)
-                else:
-                    raise RuntimeError(f"Unknown alg: {alg}")
-                num_mask_token = mask_index.sum() / mask_index.shape[0]
-                number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else int(num_mask_token)
-                # number_transfer_tokens = 2
-                print(i,number_transfer_tokens)
-                full_confidence = torch.full_like(torch.tensor(inputs['input_ids']), -torch.inf, dtype=logits.dtype)
-                full_confidence[mask_index] = confidence
-                if number_transfer_tokens > 0:
-                    if alg_temp is None or alg_temp == 0:
-                        _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
-                    else:
-                        full_confidence = full_confidence / alg_temp
-                        full_confidence = F.softmax(full_confidence, dim=-1)
-                        transfer_index = torch.multinomial(full_confidence, num_samples=number_transfer_tokens)
-                    x_ = torch.zeros_like(torch.tensor(inputs['input_ids']), dtype=torch.long) + mask_token_id
-                    x_[mask_index] = x0.clone()
-                    row_indices = torch.arange(torch.tensor(inputs['input_ids']).size(0)).unsqueeze(1).expand_as(transfer_index)
-                    x[row_indices,transfer_index] = x_[row_indices,transfer_index]
-
-            # this allows user-defined token control of the intermediate steps
-            x = generation_tokens_hook_func(i, x, logits)
-
-            if histories is not None:
-                histories.append(x.clone())
+            x = qpc_session.run(inputs)['logits']
             end_time_iter = time.perf_counter()
-            total_time_iter = end_time_iter - start_time
-            total_time_network = logits_time_iter - start_time_iter
-            total_time_postprocess = end_time_iter - logits_time_iter
-            average_time = total_time_iter / (i+1)
-            print(f'Avg time till iteration %d is %f',i,average_time)
-            print(f'    time only network is %f',i,total_time_network)
-            print(f'    time only postprocess is %f',i,total_time_postprocess)
+            total_time_network_sample = end_time_iter - start_time_iter
+
+            # print(f'Avg time till iteration %d is %f',i,average_time)
+            print(f'    time only network at %d iteration is %f',i, total_time_network_sample)
+            # print(f'    time only postprocess is %f',i,total_time_postprocess)
         
         x = torch.tensor(x)
 
