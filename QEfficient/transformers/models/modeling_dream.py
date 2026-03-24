@@ -950,39 +950,6 @@ class DreamBaseModel(DreamPreTrainedModel):
         )
 
 
-def multinomial_free_sample_from_probs(probs, dim=-1):
-    
-    """
-    ONNX-safe multinomial sampling without CumSum.
-    Uses tril(ones) + matmul to compute CDF.
-    Works best when sampling along the last dimension.
-    """
-    assert dim == -1 or dim == probs.dim() - 1, \
-        "This implementation assumes sampling along the last dimension."
-
-    # (Optional) normalize for safety
-    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-
-    *prefix, V = probs.shape  # (..., V)
-
-    # Build lower-triangular “integrator”: [V, V]
-    # Use the same dtype/device as probs (float32/float16)
-    L = torch.tril(torch.ones((V, V), device=probs.device, dtype=probs.dtype))
-
-    # Compute cdf = probs @ L  (broadcast-friendly via reshape)
-    x = probs.reshape(-1, V)       # [N, V]
-    cdf = x @ L                    # [N, V]
-    cdf = cdf.reshape(*prefix, V)  # (..., V)
-
-    # Draw uniform in (0, 1)
-    u = torch.rand((*prefix, 1), device=probs.device, dtype=torch.float32).to(probs.dtype)
-
-    # Index is count of cdf < u along last dim
-    idx = (cdf < u).to(torch.int32).sum(dim=-1, keepdim=True)  # (..., 1)
-    return idx.long()
-
-
-
 def top_p_logits(logits, top_p=None):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
     cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
@@ -996,48 +963,6 @@ def top_p_logits(logits, top_p=None):
     logits = logits.masked_fill(mask, torch.finfo(logits.dtype).min)
     return logits
 
-def top_p_logits_mod(logits, top_p: float):
-    """
-    ONNX-friendly top-p filter without CumSum.
-    Works for logits of shape (..., V). Applies along last dim.
-    """
-    # Sort descending
-    sorted_logits, sorted_indices = torch.sort(logits, dim=-1, descending=True)
-
-    # Softmax over sorted logits
-    probs = F.softmax(sorted_logits, dim=-1)              # (..., V)
-
-    # Build tril(ones) to compute cumulative probability via matmul
-    V = probs.size(-1)
-    tril_ones = torch.tril(torch.ones((V, V), device=probs.device, dtype=probs.dtype))
-    # Compute cdf = probs @ tril_ones
-    flat = probs.reshape(-1, V)                           # [N, V]
-    cdf = flat @ tril_ones                                # [N, V]
-    cdf = cdf.reshape_as(probs)                           # (..., V)
-
-    # Boolean mask for removal: cumulative prob exceeds threshold
-    sorted_indices_to_remove = cdf > probs.new_tensor(top_p)
-
-    # Keep the first token that pushes us over the threshold
-    # (shift mask right by 1 so first True stays False)
-    # NOTE: Use slice + copy to stay trace/ONNX-friendly
-    shifted = sorted_indices_to_remove[..., :-1]
-    right_shifted = torch.cat(
-        [sorted_indices_to_remove.new_zeros((*sorted_indices_to_remove.shape[:-1], 1)),
-         shifted], dim=-1
-    )
-    sorted_indices_to_remove = right_shifted
-
-    # Scatter back to original indices
-    mask = torch.zeros_like(logits, dtype=torch.bool)
-    mask = mask.scatter(-1, sorted_indices, sorted_indices_to_remove)
-
-    # Fill masked positions with -inf of appropriate dtype
-    min_val = torch.finfo(logits.dtype).min
-    out = torch.where(mask, logits.new_tensor(min_val), logits)
-    return out
-
-
 def top_k_logits(logits, top_k=None):
     top_k = min(top_k, logits.size(-1))  # Safety check
     # Remove all tokens with a probability less than the last token of the top-k
@@ -1045,8 +970,8 @@ def top_k_logits(logits, top_k=None):
     logits = logits.masked_fill(indices_to_remove, torch.finfo(logits.dtype).min)
     return logits
 
-def sample_tokens(logits, temperature=0.0, top_p=None, top_k=None, margin_confidence=False, neg_entropy=False):
-
+def sample_tokens(logits, temperature, top_p, top_k, neg_entropy):
+    # logits = torch.where(temperature != 0, logits / temperature, logits)
     if temperature > 0:
         logits = logits / temperature
     # if top_p is not None and top_p < 1:
@@ -1085,53 +1010,36 @@ def sample_tokens(logits, temperature=0.0, top_p=None, top_k=None, margin_confid
     return confidence, x0
 
 class DreamSampler(nn.Module):
-    def __init__(self, mask_token_id, timesteps, alg = 'entropy', alg_temp = 0, temperature = 0.2,
-                                    top_k = 0, top_p = 0.95):
+    def __init__(self, mask_token_id):
         super().__init__()
-        self.top_k = top_k
-        self.temperature = temperature
-        self.alg = alg
-        self.alg_temp = alg_temp
-        self.top_p = top_p
-        self.top_k = top_k
         self.mask_token_id = mask_token_id
-        self.timesteps = timesteps
-
-    # def forward(self, current_iter, x, logits):
+        self.temperature = 0.2
+        self.top_p = 0.95
+        self.top_k = 50
+        self.entropy = True
+        self.alg_temp = 0.0
     def forward(self, x, logits):
-        # mask_index = torch.zeros_like(x).bool()
         mask_index = (x == self.mask_token_id)
-        
-        # mask_index = torch.eq(x, self.mask_token_id)          # [B, L] bool
-
         logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
-        self.timesteps = self.timesteps.to(x.device)
-        # mask_logits = logits.masked_fill(~mask_index.unsqueeze(-1), -1e30)[0]
-
-        
-        # sel = logits.masked_select(mask_index.unsqueeze(-1))  # [N_mask * V]
-        # mask_logits = sel.view(-1, logits.size(-1))
-
+        # timesteps = timesteps.to(x.device)
         mask_logits = torch.where(mask_index.unsqueeze(-1), logits, torch.tensor(0.0))
-        # mask_logits = logits[mask_index]
         # t = timesteps[current_iter]
         # s = timesteps[current_iter + 1]
-        confidence, x0 = sample_tokens(mask_logits, self.temperature, top_p=self.top_p, top_k=self.top_k, neg_entropy=True)
+        confidence, x0 = sample_tokens(mask_logits, temperature=self.temperature, top_p=self.top_p, top_k=self.top_k, neg_entropy=self.entropy)
         confidence = confidence.unsqueeze(0)
         num_mask_token = mask_index.sum() / mask_index.shape[0]
         # number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else int(num_mask_token)
         number_transfer_tokens = 2
         full_confidence = torch.full_like(x, -torch.inf, device=x.device, dtype=logits.dtype)
         full_confidence = torch.where(mask_index, confidence, full_confidence )
-        # full_confidence[mask_index] = confidence
         if number_transfer_tokens > 0:
-            _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
-            # if alg_temp is None or alg_temp == 0:
-            #     _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
-            # else:
-            #     full_confidence = full_confidence / alg_temp
-            #     full_confidence = F.softmax(full_confidence, dim=-1)
-            #     transfer_index = torch.multinomial(full_confidence, num_samples=number_transfer_tokens)
+            # _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
+            if self.alg_temp == 0:
+                _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
+            else:
+                full_confidence = full_confidence / self.alg_temp
+                full_confidence = F.softmax(full_confidence, dim=-1)
+                transfer_index = torch.multinomial(full_confidence, num_samples=number_transfer_tokens)
             x_ = torch.zeros_like(x, device=x.device, dtype=torch.long) + self.mask_token_id
             # x_[mask_index] = x0.clone()
             # x_ = x_.masked_fill(mask_index, x0)
@@ -1141,10 +1049,6 @@ class DreamSampler(nn.Module):
             transfer_index = transfer_index.to(torch.int64)
             x[row_indices,transfer_index] = x_[row_indices,transfer_index]
             
-            # src_vals = x_.gather(1, transfer_index)      # (B, K)
-
-            # # Scatter into x:
-            # x = x.scatter(1, transfer_index, src_vals)
         return x
 
 class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
@@ -1157,20 +1061,16 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         max_length = config.max_length
-        steps = 512#config.steps
-        eps = 0.001#config.eps
-        alg = "entropy"#config.alg
-        alg_temp = 0#config.alg_temp
-        temperature = 0.2#config.temperature
-        top_p = 0.95#config.top_p
-        top_k = 50#config.top_k
-        self.timesteps = torch.linspace(1, eps, steps + 1)
+        # steps = 512#config.steps
+        # eps = 0.001#config.eps
+        # alg = "entropy"#config.alg
+        # alg_temp = 0#config.alg_temp
+        # temperature = 0.2#config.temperature
+        # top_p = 0.95#config.top_p
+        # top_k = 50#config.top_k
+        # self.timesteps = torch.linspace(1, eps, steps + 1)
         self.mask_token_id = config.mask_token_id
-        self.sampler = DreamSampler(mask_token_id = self.mask_token_id, 
-                                    timesteps = self.timesteps,
-                                    alg = alg, alg_temp = alg_temp, 
-                                    temperature = temperature,
-                                    top_k = top_k, top_p = top_p)
+        self.sampler = DreamSampler(mask_token_id = self.mask_token_id)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1209,7 +1109,6 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
         }
         return dynamic_axes
 
-
     def forward(
         self,
         # current_iter: int = 0,
@@ -1225,7 +1124,8 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         num_logits_to_keep: int = 0,
-        **loss_kwargs,
+        current_iter:Optional[torch.Tensor] =None, steps: Optional[torch.Tensor]=None, temperature:Optional[torch.Tensor]=None, top_p :Optional[torch.Tensor]=None, 
+        top_k:Optional[torch.Tensor] = None, entropy:Optional[torch.Tensor] = True, alg_temp:Optional[torch.Tensor]=None
     ) -> Union[Tuple, MaskedLMOutput]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1250,20 +1150,10 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
 
         hidden_states = outputs[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+
         #ADDED HERE
         # logits = self.lm_head(hidden_states)
         logits = self.lm_head(hidden_states[:, -0:, :])#.float()
         new_x = self.sampler(input_ids, logits)
         return new_x 
-        # print(num_logits_to_keep, hidden_states.shape, logits.shape)
-        # logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
-
-
-        # return MaskedLMOutput(
-        #     loss=loss,
-        #     logits=logits,
-        #     hidden_states=outputs.hidden_states,
-        #     attentions=outputs.attentions,
-        # )
-        #ADDED HERE
-        # return logits
+        
