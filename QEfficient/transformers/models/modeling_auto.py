@@ -476,10 +476,24 @@ class QEFFAutoModel(QEFFTransformersBase):
         """
         bs = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
         seq_len = sample_seq_len# constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
-
+        iter = 1
+        steps = 512
+        temperature = 0.2
+        top_p = 0.2
+        top_k = 50
+        entropy = True
+        alg_temp = 0.1
         example_inputs = {
             "input_ids": torch.zeros((bs, seq_len), dtype=torch.int64),
-            "attention_mask": torch.ones((bs, seq_len), dtype=torch.int64),
+            "attention_mask": torch.ones((bs, seq_len), dtype=torch.int64)
+            # "current_iter": torch.tensor(iter),
+            # "steps": torch.tensor(steps),
+            # "temperature": torch.tensor(temperature),
+            # # "eps": torch.tensor(0.2),
+            # "top_p": torch.tensor(top_p),
+            # "top_k": torch.tensor(top_k),
+            # "entropy":torch.tensor(entropy),
+            # "alg_temp": torch.tensor(alg_temp)
         }
 
         dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}, "attention_mask": {0: "batch_size", 1: "seq_len"}, "logits": {0: "batch_size", 1: "seq_len"}}
@@ -491,7 +505,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             output_names,
             dynamic_axes,
             export_dir=export_dir,
-            verbose=True,
+            # verbose=True,
             use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
         )
 
@@ -867,7 +881,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         generation_tokens_hook_func = kwargs.pop("generation_tokens_hook_func", lambda step, x, logits: x)
         generation_logits_hook_func = kwargs.pop("generation_logits_hook_func", lambda step, x, logits: logits)
         import time
-        start_time = time.perf_counter()
+        # start_time = time.perf_counter()
         # print(generation_config)
         # exit()
         # 2. Define model inputs
@@ -929,6 +943,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         qpc_session.set_buffers(outputs)
             
 
+        start_time = time.perf_counter()
         result = self._sample(
             start_time,
             qpc_session,
@@ -960,15 +975,20 @@ class QEFFAutoModel(QEFFTransformersBase):
         max_length = generation_config.max_length
         mask_token_id = generation_config.mask_token_id
         steps = generation_config.steps
-        eps = generation_config.eps
-        alg = generation_config.alg
-        alg_temp = generation_config.alg_temp
-        temperature = generation_config.temperature
-        top_p = generation_config.top_p
-        top_k = generation_config.top_k
+        # steps = torch.tensor(generation_config.steps)
+        # eps = torch.tensor(generation_config.eps)
+        # alg = torch.tensor(generation_config.alg)
+        # alg_temp = torch.tensor(generation_config.alg_temp)
+        # temperature = torch.tensor(generation_config.temperature)
+        # top_p = torch.tensor(generation_config.top_p)
+        # top_k = generation_config.top_k
         compile_length = generation_config.compile_length
         qpc_path = generation_config.qpc_path
         device_ids = generation_config.device_ids
+        # if alg == 'entropy':
+        #     entropy = torch.tensor(True)
+        # else:
+        #     entropy = torch.tensor(False)
 
         histories = [] if (return_dict_in_generate and output_history) else None
 
@@ -991,7 +1011,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             tok_idx = None
             attention_mask = "full"
 
-        timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
+        # timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
 
         # this allows user-defined token control of the intermediate steps
         x = generation_tokens_hook_func(None, x, None)
@@ -999,16 +1019,27 @@ class QEFFAutoModel(QEFFTransformersBase):
         x = x.numpy()
         attention_mask = F.pad(attention_mask, (0, compile_length - attention_mask.shape[1]), value=0.0)
         attention_mask = attention_mask.numpy()
+        '''
+        example_inputs = {
+            "input_ids": torch.zeros((bs, seq_len), dtype=torch.int64),
+            # "attention_mask": torch.ones((bs, seq_len), dtype=torch.int64),
+            "steps": torch.tensor(500, dtype=torch.int64),
+            "temperature": torch.tensor(0.06, dtype=torch.float32),
+            "eps": torch.tensor(0.06, dtype=torch.float32),
+            "top_p": torch.tensor(0.06, dtype=torch.float32),
+            "top_k": torch.tensor(0.06, dtype=torch.float32),
+            "entropy":torch.tensor(1, dtype=bool),
+            "alg_temp": torch.tensor(0.06, dtype=torch.float32)
+        }
+        '''
         
         for i in range(steps):
-            # x = x.numpy()
-            # print(x.shape, attention_mask.shape, attention_mask.dtype, x.dtype)
-            # x.tofile('input_id.raw')
-            # attention_mask.tofile('attention_mask.raw')
-            # exit()
-
             start_time_iter = time.perf_counter()
-            inputs = dict(input_ids=x, attention_mask=attention_mask)
+            # x.tofile("input_ids_8ts_4K.raw")
+            # attention_mask.tofile("attention_mask_8ts_4K.raw")
+            # exit()
+            inputs = dict(input_ids=x, attention_mask = attention_mask)
+            # inputs = dict(input_ids=x, attention_mask = attention_mask, current_iter = i, steps = steps, temperature = temperature, eps = eps, top_p = top_p, top_k = top_k, entropy = entropy, alg_temp= alg_temp)
             # mask_index = (inputs['input_ids'] == mask_token_id)
             
             # print(inputs)
@@ -1017,7 +1048,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             total_time_network_sample = end_time_iter - start_time_iter
 
             # print(f'Avg time till iteration %d is %f',i,average_time)
-            print(f'    time only network at %d iteration is %f',i, total_time_network_sample)
+            print(f'Time only network at %d iteration is %f',i, total_time_network_sample)
             # print(f'    time only postprocess is %f',i,total_time_postprocess)
         
         x = torch.tensor(x)
