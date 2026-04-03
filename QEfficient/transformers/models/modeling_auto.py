@@ -995,6 +995,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         # pad input_ids to max_length
         # x = input_ids
         x = F.pad(input_ids, (0, compile_length - input_ids.shape[1]), value=mask_token_id)
+        print('Number of steps are ',steps)
 
         if attention_mask is not None and torch.any(attention_mask == 0.0):
             # we do not mask the [MASK] tokens so value = 1.0
@@ -1035,20 +1036,23 @@ class QEFFAutoModel(QEFFTransformersBase):
         
         for i in range(steps):
             start_time_iter = time.perf_counter()
-            # x.tofile("input_ids_8ts_4K.raw")
-            # attention_mask.tofile("attention_mask_8ts_4K.raw")
-            # exit()
+            x.tofile("input_ids_16ts_1K.raw")
+            attention_mask.tofile("attention_mask_16ts_1K.raw")
+            exit()
             inputs = dict(input_ids=x, attention_mask = attention_mask)
             # inputs = dict(input_ids=x, attention_mask = attention_mask, current_iter = i, steps = steps, temperature = temperature, eps = eps, top_p = top_p, top_k = top_k, entropy = entropy, alg_temp= alg_temp)
             # mask_index = (inputs['input_ids'] == mask_token_id)
             
             # print(inputs)
             x = qpc_session.run(inputs)['logits']
+            x = torch.tensor(x)
+            x = generation_tokens_hook_func(None, x, None)
+            x = x.numpy()
             end_time_iter = time.perf_counter()
             total_time_network_sample = end_time_iter - start_time_iter
 
             # print(f'Avg time till iteration %d is %f',i,average_time)
-            print(f'Time only network at %d iteration is %f',i, total_time_network_sample)
+            print(f'Time only network, gradio at {i} iteration is {total_time_network_sample:.6f}')
             # print(f'    time only postprocess is %f',i,total_time_postprocess)
         
         x = torch.tensor(x)

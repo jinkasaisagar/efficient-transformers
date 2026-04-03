@@ -11,6 +11,7 @@ from transformers import AutoTokenizer
 
 from QEfficient import QEFFAutoModelForCausalLM
 
+import time
 
 def main():
     parser = argparse.ArgumentParser(description="Basic text generation inference")
@@ -18,7 +19,7 @@ def main():
     parser.add_argument("--prompt", type=str, default="Hello, how are you?", help="Input prompt")
     parser.add_argument("--prefill-seq-len", type=int, default=32, help="Prefill sequence length")
     parser.add_argument("--ctx-len", type=int, default=128, help="Context length")
-    parser.add_argument("--generation-len", type=int, default=100, help="Number of tokens to generate")
+    parser.add_argument("--generation-len", type=int, default=1000, help="Number of tokens to generate")
     parser.add_argument("--num-cores", type=int, default=16, help="Number of cores")
     parser.add_argument(
         "--device-group",
@@ -42,15 +43,18 @@ def main():
     print(f"Model compiled to: {qpc_path}")
 
     # Generate text
+    start_time_iter = time.perf_counter()
     exec_info = model.generate(
         tokenizer=tokenizer,
         prompts=[args.prompt],
         device_id=args.device_group,
         generation_len=args.generation_len,
     )
+    end_time_iter = time.perf_counter()
 
     print(f"\nPrompt: {args.prompt}")
     print(f"Generated: {exec_info.generated_texts[0]}")
+    print(f'Total time taken is {end_time_iter - start_time_iter}')
 
 
 if __name__ == "__main__":

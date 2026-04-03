@@ -309,6 +309,42 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+def repeat_kv_text(
+    hidden_states: torch.Tensor, n_rep: int = 2, num_key_value_heads=16, num_attention_heads=40, orig_kv_heads=8
+) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    rows_to_fill = num_attention_heads % (num_key_value_heads * n_rep)  # -> 8
+    if rows_to_fill == 0:
+        return hidden_states
+    if rows_to_fill != 0:
+        old_repeats = num_key_value_heads // orig_kv_heads  # -> 2
+        required_repeats = rows_to_fill // orig_kv_heads  # -> 1
+        remaining_expansion_data = hidden_states[
+            :, [i for i in range(0, num_key_value_heads, old_repeats)], :, :
+        ]  # 1, 8
+        remaining_expansion_data = torch.repeat_interleave(
+            remaining_expansion_data, repeats=required_repeats, dim=1
+        )  # 1x8
+        chunk_fill_size = n_rep * old_repeats  # -> 4
+
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    hidden_states = hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+    if rows_to_fill != 0:
+        tensors_to_cat = []
+        for k in range(orig_kv_heads):
+            tensors_to_cat.extend(
+                [
+                    hidden_states[:, k * chunk_fill_size : (k + 1) * chunk_fill_size, :, :],
+                    remaining_expansion_data[:, k * required_repeats : (k + 1) * required_repeats, :, :],
+                ]
+            )
+        hidden_states = torch.cat(tensors_to_cat, dim=1)
+    return hidden_states
 
 class DreamAttention(nn.Module):
     """
@@ -597,6 +633,21 @@ class DreamBlockedAttention(DreamAttention):
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        # key_states = repeat_kv_text(
+        #     key_states,
+        #     1,#module.num_key_value_groups,
+        #     16,#num_key_value_heads=module.num_key_value_heads,
+        #     28,#num_attention_heads=module.num_heads,
+        #     4,#orig_kv_heads=module.orig_kv_heads,
+        # )
+        # value_states = repeat_kv_text(
+        #     value_states,
+        #     1,#module.num_key_value_groups,
+        #     16,#num_key_value_heads=module.num_key_value_heads,
+        #     28,#num_attention_heads=module.num_heads,
+        #     4,#orig_kv_heads=module.orig_kv_heads,
+        # )
         #ADDED HERE
         attention_mask = attention_mask.bool()
 
@@ -636,7 +687,7 @@ class DreamBlockedAttention(DreamAttention):
         #     is_causal=False, # hard coded
         # )
         # print('Blocked vs unblocked diff: ', (attn_output - attn_output_1).abs().max())
-
+        # print('IN block attention ', attn_output.shape, query_states.shape, key_states.shape)
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
@@ -1033,13 +1084,13 @@ class DreamSampler(nn.Module):
         full_confidence = torch.full_like(x, -torch.inf, device=x.device, dtype=logits.dtype)
         full_confidence = torch.where(mask_index, confidence, full_confidence )
         if number_transfer_tokens > 0:
-            # _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
-            if self.alg_temp == 0:
-                _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
-            else:
-                full_confidence = full_confidence / self.alg_temp
-                full_confidence = F.softmax(full_confidence, dim=-1)
-                transfer_index = torch.multinomial(full_confidence, num_samples=number_transfer_tokens)
+            _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
+            # if self.alg_temp == 0:
+            #     _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
+            # else:
+            #     full_confidence = full_confidence / self.alg_temp
+            #     full_confidence = F.softmax(full_confidence, dim=-1)
+            #     transfer_index = torch.multinomial(full_confidence, num_samples=number_transfer_tokens)
             x_ = torch.zeros_like(x, device=x.device, dtype=torch.long) + self.mask_token_id
             # x_[mask_index] = x0.clone()
             # x_ = x_.masked_fill(mask_index, x0)
