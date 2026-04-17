@@ -452,7 +452,7 @@ def compute_blocked_attention(
     Returns:
         torch.FloatTensor: Attention output of shape (BS, NH, CL, DH)
     """
-    print(blocking_mode)
+    # print(blocking_mode)
     if blocking_mode == "kv":
         return apply_kv_blocking(q, k, v, head_block_size, num_kv_blocks, attention_mask)
     elif blocking_mode == "q":

@@ -245,6 +245,9 @@ class DreamGenerationConfig(GenerationConfig):
         self.steps: int = kwargs.pop("steps", 512)
         self.alg: str = kwargs.pop("alg", 'origin')
         self.alg_temp: Optional[float] = kwargs.pop("alg_temp", None)
+        self.number_transfer_tokens = kwargs.pop("number_transfer_tokens", 1)
+        self.expand_budget = kwargs.pop("expand_budget", None)
+        self.pad_delete_to_right = kwargs.pop("pad_delete_to_right", False)
 
         #qpc specific params
         self.compile_length: int = kwargs.pop("compile_length", 1000)
@@ -261,7 +264,9 @@ class DreamGenerationConfig(GenerationConfig):
         self.pad_token_id = kwargs.pop("pad_token_id", None)
         self.bos_token_id = kwargs.pop("bos_token_id", None)
         self.eos_token_id = kwargs.pop("eos_token_id", None)
-
+        self.expand_token_id = kwargs.pop("expand_token_id", None)
+        self.delete_token_id = 151643#kwargs.pop("eos_token_id", None)
+        
         # Wild card
         self.generation_kwargs = kwargs.pop("generation_kwargs", {})
 
@@ -505,7 +510,64 @@ class QEFFAutoModel(QEFFTransformersBase):
             output_names,
             dynamic_axes,
             export_dir=export_dir,
-            # verbose=True,
+            verbose=True,
+            use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
+        )
+    def export_dreamon(self, sample_seq_len, export_dir: Optional[str] = None, **kwargs) -> str:
+        """
+        Export the model to ONNX format using ``torch.onnx.export``.
+
+        This method prepares example inputs and dynamic axes based on the model configuration,
+        then exports the model to an ONNX graph suitable for compilation and deployment on Cloud AI 100 hardware.
+
+        Parameters
+        ----------
+        export_dir : str, optional
+            Directory path where the exported ONNX graph will be saved. If not provided,
+            the default export directory is used.
+        use_onnx_subfunctions: bool, optional
+            whether to enable ONNX subfunctions during export. Exporting PyTorch model to ONNX with modules as subfunctions helps to reduce export/compile time. Defaults to False
+
+        Returns
+        -------
+        str
+            Path to the generated ONNX graph file.
+        """
+        bs = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
+        seq_len = sample_seq_len# constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
+        mask_token = self.config.mask_token_id
+        iter = 1
+        steps = 512
+        temperature = 0.2
+        top_p = 0.2
+        top_k = 50
+        entropy = True
+        alg_temp = 0.1
+        example_inputs = {
+            "input_ids": torch.ones((bs, seq_len), dtype=torch.int64)*mask_token,
+            "attention_mask": torch.ones((bs, seq_len), dtype=torch.int64),
+            "position_ids": torch.ones((bs, seq_len), dtype=torch.int64)
+            # "current_iter": torch.tensor(iter),
+            # "steps": torch.tensor(steps),
+            # "temperature": torch.tensor(temperature),
+            # # "eps": torch.tensor(0.2),
+            # "top_p": torch.tensor(top_p),
+            # "top_k": torch.tensor(top_k),
+            # "entropy":torch.tensor(entropy),
+            # "alg_temp": torch.tensor(alg_temp)
+        }
+
+        dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}, "attention_mask": {0: "batch_size", 1: "seq_len"}, 
+                        "position_ids": {0: "batch_size", 1: "seq_len"},"logits": {0: "batch_size", 1: "seq_len"}}
+
+        output_names = ["logits"]
+
+        return self._export(
+            example_inputs,
+            output_names,
+            dynamic_axes,
+            export_dir=export_dir,
+            verbose=True,
             use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
         )
 
@@ -819,6 +881,8 @@ class QEFFAutoModel(QEFFTransformersBase):
                     generation_config.pad_token_id = self.generation_config.pad_token_id
                 if generation_config.mask_token_id is None:
                     generation_config.mask_token_id = self.generation_config.mask_token_id
+                if generation_config.expand_token_id is None:
+                    generation_config.expand_token_id = self.generation_config.expand_token_id
 
         return generation_config
 
@@ -900,6 +964,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             has_default_max_length=has_default_max_length,
             input_ids_length=input_ids_length,
         )
+        
 
         self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
         
@@ -933,9 +998,6 @@ class QEFFAutoModel(QEFFTransformersBase):
         qpc_path = generation_config.qpc_path
         device_ids = generation_config.device_ids
         qpc_session = QAICInferenceSession(str(qpc_path), device_ids=device_ids)
-        # outputs = {
-        #         "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.float32),
-        #     }
         outputs = {
                 "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.int64),
             }
@@ -972,7 +1034,8 @@ class QEFFAutoModel(QEFFTransformersBase):
         # init values
         output_history = generation_config.output_history
         return_dict_in_generate = generation_config.return_dict_in_generate
-        max_length = generation_config.max_length
+        print('MAX LENGTH IS SET TO 224')
+        max_length = 224 #generation_config.max_length
         mask_token_id = generation_config.mask_token_id
         steps = generation_config.steps
         # steps = torch.tensor(generation_config.steps)
@@ -1036,14 +1099,10 @@ class QEFFAutoModel(QEFFTransformersBase):
         
         for i in range(steps):
             start_time_iter = time.perf_counter()
-            x.tofile("input_ids_16ts_1K.raw")
-            attention_mask.tofile("attention_mask_16ts_1K.raw")
-            exit()
+            # x.tofile("input_ids_16ts_1K.raw")
+            # attention_mask.tofile("attention_mask_16ts_1K.raw")
+            # exit()
             inputs = dict(input_ids=x, attention_mask = attention_mask)
-            # inputs = dict(input_ids=x, attention_mask = attention_mask, current_iter = i, steps = steps, temperature = temperature, eps = eps, top_p = top_p, top_k = top_k, entropy = entropy, alg_temp= alg_temp)
-            # mask_index = (inputs['input_ids'] == mask_token_id)
-            
-            # print(inputs)
             x = qpc_session.run(inputs)['logits']
             x = torch.tensor(x)
             x = generation_tokens_hook_func(None, x, None)
@@ -1066,6 +1125,249 @@ class QEFFAutoModel(QEFFTransformersBase):
             # )
         else:
             return {'sequences': x}
+
+    @torch.no_grad()
+    def diffusion_generate_dreamon(
+        self,
+        inputs: Optional[torch.Tensor] = None,
+        generation_config: Optional[DreamGenerationConfig] = None,
+        **kwargs,
+    ) -> Union[DreamModelOutput, torch.LongTensor]:
+        # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
+        generation_config = self._prepare_generation_config(generation_config, **kwargs)
+        generation_tokens_hook_func = kwargs.pop("generation_tokens_hook_func", lambda step, x, logits: x)
+        generation_logits_hook_func = kwargs.pop("generation_logits_hook_func", lambda step, x, logits: logits)
+        import time
+        # start_time = time.perf_counter()
+        # print(generation_config)
+        # exit()
+        # 2. Define model inputs
+        assert inputs is not None
+        input_ids = inputs
+        device = input_ids.device
+        attention_mask = kwargs.pop("attention_mask", None)
+        assert attention_mask is None, 'We currently do not support attention_mask for DreamOn since we recompute attention mask after each denoising step.'
+        self._prepare_special_tokens(generation_config, device=device)
+
+        # 3. Prepare `max_length`.
+        input_ids_length = input_ids.shape[-1]
+        ## get number of mask tokens as start_gen_len
+        mask_token_id = generation_config.mask_token_id
+        mask_token_indices = torch.where(input_ids == mask_token_id)[1]
+        
+        if mask_token_indices.numel() == 0:
+            raise ValueError("No mask tokens found in the input_ids.")
+        
+        num_mask_tokens = mask_token_indices.numel()
+        ## get the first index of mask 
+        mask_token_index = mask_token_indices[0]
+        ## assign it as prefix_len
+        prefix_len = mask_token_index
+        
+        start_gen_len = num_mask_tokens  # Ensure start_gen_len is defined
+
+        # generation_config.max_length = generation_config.max_length - num_mask_tokens
+        has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
+        generation_config = self._prepare_generated_length(
+            generation_config=generation_config,
+            has_default_max_length=has_default_max_length,
+            input_ids_length=input_ids_length,
+        )
+        
+
+        self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
+        
+        # 4. Check input_ids
+        if not is_torchdynamo_compiling(): #and self.device.type != input_ids.device.type:
+            warnings.warn(
+                "You are calling .generate() with the `input_ids` being on a device type different"
+                f" than your model's device. `input_ids` is on, whereas the model"
+                f" is on . You may experience unexpected behaviors or slower generation."
+                " Please make sure that you have put `input_ids` to the"
+                f" correct device by calling for example input_ids = input_ids.to('') before"
+                " running `.generate()`.",
+                UserWarning,
+            )
+        
+        qpc_path = generation_config.qpc_path
+        device_ids = generation_config.device_ids
+        qpc_session = QAICInferenceSession(str(qpc_path), device_ids=device_ids)
+        outputs = {
+                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.int64),
+            }
+        outputs = {k: v.numpy() if isinstance(v, torch.Tensor) else v for k, v in outputs.items()}  
+        qpc_session.set_buffers(outputs)
+
+        start_time = time.perf_counter()
+        result = self._sample_dreamon(
+            start_time,
+            qpc_session,
+            input_ids,
+            prefix_len,
+            start_gen_len,
+            attention_mask=attention_mask,
+            generation_config=generation_config,
+            generation_tokens_hook_func=generation_tokens_hook_func,
+            generation_logits_hook_func=generation_logits_hook_func
+        )
+        end_time = time.perf_counter()
+
+        total_time = end_time - start_time
+        average_time_per_iteration = total_time / generation_config.steps
+        return result, average_time_per_iteration
+
+    def _sample_dreamon(
+        self,
+        start_time,
+        qpc_session,
+        input_ids: torch.LongTensor,
+        prefix_len:int,
+        start_gen_len:int,
+        attention_mask: Optional[torch.LongTensor],
+        generation_config: DreamGenerationConfig,
+        generation_tokens_hook_func,
+        generation_logits_hook_func
+    ) -> Union[DreamModelOutput, torch.LongTensor]:
+        # init values
+        output_history = generation_config.output_history
+        return_dict_in_generate = generation_config.return_dict_in_generate
+
+        pad_delete_to_right = generation_config.pad_delete_to_right
+        eps = generation_config.eps
+        alg = generation_config.alg
+        alg_temp = generation_config.alg_temp
+        temperature = generation_config.temperature
+        top_p = generation_config.top_p
+        top_k = generation_config.top_k
+        device = input_ids.device  
+
+        num_generation_tokens = start_gen_len
+        max_length = generation_config.max_length
+        max_gen_len = max_length - prefix_len
+        
+        expand_budget = generation_config.expand_budget
+        if expand_budget is None:
+            expand_budget = max_gen_len * 2
+
+        number_transfer_tokens = generation_config.number_transfer_tokens
+        eos_token_id = generation_config.eos_token_id 
+        delete_token_id = generation_config.delete_token_id  
+        expand_token_id = generation_config.expand_token_id
+        mask_token_id = generation_config.mask_token_id
+        # steps = torch.tensor(generation_config.steps)
+        # eps = torch.tensor(generation_config.eps)
+        # alg = torch.tensor(generation_config.alg)
+        # alg_temp = torch.tensor(generation_config.alg_temp)
+        # temperature = torch.tensor(generation_config.temperature)
+        # top_p = torch.tensor(generation_config.top_p)
+        # top_k = generation_config.top_k
+        compile_length = generation_config.compile_length
+        qpc_path = generation_config.qpc_path
+        device_ids = generation_config.device_ids
+        # if alg == 'entropy':
+        #     entropy = torch.tensor(True)
+        # else:
+        #     entropy = torch.tensor(False)
+
+        histories = [] if (return_dict_in_generate and output_history) else None
+        # pad input_ids to max_length
+        # x = input_ids
+        x = F.pad(input_ids, (0, compile_length - input_ids.shape[1]), value=eos_token_id)
+
+        for i in range(2 * max_gen_len + 2 * expand_budget):
+            # print('Expand, mask, delete, pad_delete_to_right, max_gen_len, expand_budget', expand_token_id, mask_token_id, delete_token_id, pad_delete_to_right, max_gen_len, expand_budget)
+            current_window_length = input_ids.shape[1] - start_gen_len + num_generation_tokens
+            attention_mask = torch.ones([input_ids.shape[0], current_window_length], dtype=torch.int64).to(device)
+            attention_mask = F.pad(attention_mask, (0, compile_length - attention_mask.shape[1]), value=0)
+            mask_index = (x == mask_token_id) & (attention_mask == 1)
+            if torch.all(~mask_index[:, :current_window_length]):
+                break  # exit if all mask tokens are denoised
+
+            tok_idx = attention_mask.long().cumsum(-1) - 1
+            tok_idx.masked_fill_(attention_mask == 0, 1)
+
+            start_time_iter = time.perf_counter()
+            # x.tofile("input_ids_16ts_1K.raw")
+            # attention_mask.tofile("attention_mask_16ts_1K.raw")
+            # exit()
+            if histories is not None:
+                histories.append(x[0,:current_window_length].clone())
+            inputs = dict(input_ids=x.numpy(), attention_mask = attention_mask.numpy(), position_ids= tok_idx.numpy())
+            x = qpc_session.run(inputs)['logits']
+            
+            x = torch.tensor(x)
+            if histories is not None:
+                histories.append(x[0,:current_window_length].clone())
+
+            ### 3. ---- delete -------
+            # pad delete to right if needed
+            if pad_delete_to_right:
+                x_seq = x[0]  # Flatten to 1D: shape [seq_len]
+
+                # Find indices where EOS occurs
+                delete_indices = (x_seq == delete_token_id).nonzero(as_tuple=True)
+
+                if len(delete_indices[0]) > 0:
+                    # Get the first occurrence of delete
+                    first_delete_idx = delete_indices[0][0].item()
+                    position_mask = torch.arange(x_seq.size(0), device=device) >= first_delete_idx
+                    replace_mask = position_mask & mask_index[0]
+                    # Set all tokens after EOS to eos_id
+                    x_seq.masked_fill_(replace_mask, delete_token_id)
+                    x = x_seq.unsqueeze(0)
+            # delete
+            delete_indices = ((x[0] == delete_token_id) & (mask_index[0] == 1)).nonzero(as_tuple=False).squeeze(1)
+            if delete_indices.numel() > 0:
+                for idx in sorted(delete_indices.tolist(), reverse=True):
+                    x = torch.cat((
+                        x[:, :idx],
+                        x[:, idx + 1:],
+                        torch.tensor([[mask_token_id]], device=device)
+                    ), dim=1)
+                    num_generation_tokens -= 1
+                if histories is not None:
+                    current_window_length = input_ids.shape[1] - start_gen_len + num_generation_tokens
+                    histories.append(x[0,:current_window_length].clone())
+            ### 4. ---- expand --------
+            expand_indices = (x[0] == expand_token_id).nonzero(as_tuple=False).squeeze(1)
+            if expand_indices.numel() > 0:
+                # Process from right to left to prevent shifting issues
+                for idx in sorted(expand_indices.tolist(), reverse=True):
+                    x = torch.cat((
+                        x[:, :idx],
+                        torch.tensor([[mask_token_id, mask_token_id]], device=device),
+                        x[:, idx + 1:]
+                    ), dim=1)
+                    num_generation_tokens += 1
+                    expand_budget -= 1
+                    # Truncate back to max_tokens if needed
+                    if x.shape[1] > compile_length:
+                        x = x[:, :compile_length]
+                
+                if histories is not None:
+                    current_window_length = input_ids.shape[1] - start_gen_len + num_generation_tokens
+                    histories.append(x[0,:current_window_length].clone())
+            x = generation_tokens_hook_func(None, x, None)
+            # x = x.numpy()
+            end_time_iter = time.perf_counter()
+            total_time_network_sample = end_time_iter - start_time_iter
+
+            # print(f'Avg time till iteration %d is %f',i,average_time)
+            print(f'Time only network, gradio at {i} iteration is {total_time_network_sample:.6f}')
+            # print(f'    time only postprocess is %f',i,total_time_postprocess)
+        
+        x = torch.tensor(x)
+
+        if return_dict_in_generate:
+            return {'sequences': x,
+                    'history': histories}
+            # return DreamModelOutput(
+            #     sequences=x,
+            #     history=histories,
+            # )
+        else:
+            return {'sequences': x}
+
 
 
 class QEffVisionEncoderForTextImageToTextModel(QEFFBaseModel):
