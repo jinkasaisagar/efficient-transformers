@@ -479,6 +479,7 @@ class CustomOpsTransform(ModuleMappingTransform):
         Qwen3MoeRMSNorm: CustomRMSNormAIC,
         Gemma3RMSNorm: QEffGemma3CustomRMSNormAIC,
         Olmo2RMSNorm: CustomRMSNormAIC,
+        # DreamRMSNorm: CustomRMSNormAIC,
     }
 
 
@@ -824,6 +825,8 @@ class KVCacheExternalModuleMapperTransform(ExternalModuleMapperTransform):
             "get_qeff_language_decoder": QEffInternVLModel.get_qeff_language_decoder,
         },
         "InternVisionEmbeddings": {"forward": QEffInternVisionEmbeddings.forward},
+        # Mapping for Dream
+        "DreamRMSNorm": {"forward": CustomRMSNormAIC.forward},
         # Mapping for Molmo
         "MolmoForCausalLM": {
             "forward": QEffMolmoModel.forward,

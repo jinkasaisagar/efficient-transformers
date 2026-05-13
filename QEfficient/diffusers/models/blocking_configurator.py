@@ -334,10 +334,10 @@ def build_transformer_blocking_config(
         raise ValueError("Missing sequence length (cl/seq_len/sequence_length) to compute blocking configuration.")
     ctx_len = _get_attr_or_key(specializations, ("ctx_len", "context_length"))
     if ctx_len is None:
-        # ctx_len = _get_attr_or_key(model_config, ("context_length", "max_position_embeddings"))
-        print("For diffusion models, ctx_len = seq_len ",ctx_len, seq_len)
-    if ctx_len is None:
-        ctx_len = seq_len
+        ctx_len = _get_attr_or_key(model_config, ("context_length", "max_position_embeddings"))
+        print("For diffusion models, ctx_len and seq_len is ",ctx_len, seq_len)
+    # if ctx_len is None:
+    #     ctx_len = seq_len
 
     num_heads = _require_value(
         _get_attr_or_key(model_config, ("num_attention_heads", "num_heads", "attention_heads", "n_heads")),

@@ -1034,9 +1034,12 @@ class QEFFAutoModel(QEFFTransformersBase):
         # init values
         output_history = generation_config.output_history
         return_dict_in_generate = generation_config.return_dict_in_generate
-        print('MAX LENGTH IS SET TO 224')
-        max_length = 224 #generation_config.max_length
+        # print(f'MAX LENGTH IS SET TO {generation_config.max_length}')
+        # breakpoint()
+        max_length = generation_config.max_length
         mask_token_id = generation_config.mask_token_id
+        eos_token_id = generation_config.eos_token_id
+        pad_token_id = generation_config.pad_token_id
         steps = generation_config.steps
         # steps = torch.tensor(generation_config.steps)
         # eps = torch.tensor(generation_config.eps)
@@ -1056,7 +1059,10 @@ class QEFFAutoModel(QEFFTransformersBase):
         histories = [] if (return_dict_in_generate and output_history) else None
 
         # pad input_ids to max_length
-        # x = input_ids
+        prompt_length = input_ids.shape[1]
+        # x = F.pad(input_ids, (0, generation_config.max_new_tokens), value=mask_token_id)
+        # x = F.pad(x,(0, compile_length - x.shape[1]), value=pad_token_id)
+        # breakpoint()
         x = F.pad(input_ids, (0, compile_length - input_ids.shape[1]), value=mask_token_id)
         print('Number of steps are ',steps)
 
@@ -1097,6 +1103,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         }
         '''
         
+        # for i in range(50):
         for i in range(steps):
             start_time_iter = time.perf_counter()
             # x.tofile("input_ids_16ts_1K.raw")
@@ -1107,13 +1114,50 @@ class QEFFAutoModel(QEFFTransformersBase):
             x = torch.tensor(x)
             x = generation_tokens_hook_func(None, x, None)
             x = x.numpy()
-            end_time_iter = time.perf_counter()
-            total_time_network_sample = end_time_iter - start_time_iter
+            # print(x[:,-100:])
+            
+            mask_token_mask = (x == mask_token_id).any()
+
+            eos_mask  = (x == eos_token_id)#.any()
+            # breakpoint()
+            eos_positions = np.where(eos_mask)
+            # first_eos_idx = eos_positions[-1][0]
+            if len(eos_positions[0]) > 0:
+                first_eos_idx = eos_positions[-1][0]
+                x[:, first_eos_idx + 1:] = eos_token_id
+            if not mask_token_mask:
+                break
+            '''
+            if eos_mask.any():
+                max_consecutive_eos = 0
+                eos_indices = np.where(eos_mask)
+                first_eos_idx = eos_indices[-1][0]
+                if len(eos_indices[-1]) > 72:
+                    eos_flat = eos_mask.flatten()
+                    current_consecutive = 0
+                    for is_eos in eos_flat:
+                        if is_eos:
+                            current_consecutive += 1
+                            max_consecutive_eos = max(max_consecutive_eos, current_consecutive)
+                        else:
+                            current_consecutive = 0
+                    if max_consecutive_eos > 40:
+                        print('Reached maximum limit consecutive of eos tokens')
+                        x[:,eos_indices[-1][1]:]=eos_token_id  
+                has_mask_before_eos = mask_token_mask[..., :first_eos_idx].any()
+            else:
+                has_mask_before_eos = False
+            
 
             # print(f'Avg time till iteration %d is %f',i,average_time)
-            print(f'Time only network, gradio at {i} iteration is {total_time_network_sample:.6f}')
+            if eos_mask.any() and not has_mask_before_eos:
+                print(f'Generation complete at iteration {i}: EOS generated and no masks before EOS')
+                break
+            '''
             # print(f'    time only postprocess is %f',i,total_time_postprocess)
-        
+            end_time_iter = time.perf_counter()
+            total_time_network_sample = end_time_iter - start_time_iter
+            print(f'Time only network, gradio at {i} iteration is {total_time_network_sample:.6f} for input_ids of length {x.shape[1]} ')
         x = torch.tensor(x)
 
         if return_dict_in_generate:
@@ -1274,6 +1318,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         # x = input_ids
         x = F.pad(input_ids, (0, compile_length - input_ids.shape[1]), value=eos_token_id)
 
+        # for i in range(256):
         for i in range(2 * max_gen_len + 2 * expand_budget):
             # print('Expand, mask, delete, pad_delete_to_right, max_gen_len, expand_budget', expand_token_id, mask_token_id, delete_token_id, pad_delete_to_right, max_gen_len, expand_budget)
             current_window_length = input_ids.shape[1] - start_gen_len + num_generation_tokens
