@@ -220,6 +220,7 @@ class QEffDreamRotaryEmbedding(nn.Module):
         dim = config.hidden_size // config.num_attention_heads
         self.inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, dim, 2, device=device, dtype=torch.float) / dim))
         self.original_max_seq_len = config.max_position_embeddings or config.max_sequence_length
+        self.scaling_factor = config.rope_scaling
         self._set_cos_sin_cache(
             seq_len=self.original_max_seq_len, device=self.inv_freq.device, dtype=torch.get_default_dtype()
         )
@@ -227,7 +228,7 @@ class QEffDreamRotaryEmbedding(nn.Module):
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=torch.int64).type_as(self.inv_freq)
-
+        # t = t / self.scaling_factor
         freqs = torch.outer(t, self.inv_freq)
 
         emb = torch.cat((freqs, freqs), dim=-1)
@@ -309,7 +310,28 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+
 def repeat_kv_text(
+    hidden_states: torch.Tensor, n_rep: int = 2, num_key_value_heads=16, num_attention_heads=40, orig_kv_heads=8
+) -> torch.Tensor:
+    """
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    """
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if num_attention_heads % (num_key_value_heads * n_rep)  !=0:
+        required_repeats = (num_attention_heads//num_key_value_heads) + 1
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, required_repeats, slen, head_dim).reshape(batch, num_key_value_heads*required_repeats, slen, head_dim)
+        rows_to_remove = torch.arange(orig_kv_heads) * (num_key_value_heads//orig_kv_heads) * required_repeats
+        GatherIndices = [0,1,2,3,4,5,6,8,9,10,11,12,13,14,16,17,18,19,20,21,22,24,25,26,27,28,29,30]
+        hidden_states = torch.cat([hidden_states[:,0:7,:,:], hidden_states[:,8:15,:,:], hidden_states[:,16:23,:,:], hidden_states[:,23:30,:,:]], dim=1)
+        return hidden_states
+    else:
+        required_repeats = (num_attention_heads//num_key_value_heads)
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, required_repeats, slen, head_dim).reshape(batch, num_key_value_heads*required_repeats, slen, head_dim)
+        return hidden_states
+    
+def repeat_kv_text_old(
     hidden_states: torch.Tensor, n_rep: int = 2, num_key_value_heads=16, num_attention_heads=40, orig_kv_heads=8
 ) -> torch.Tensor:
     """
@@ -326,13 +348,15 @@ def repeat_kv_text(
         remaining_expansion_data = hidden_states[
             :, [i for i in range(0, num_key_value_heads, old_repeats)], :, :
         ]  # 1, 8
-        remaining_expansion_data = torch.repeat_interleave(
-            remaining_expansion_data, repeats=required_repeats, dim=1
-        )  # 1x8
+        # import ipdb; ipdb.set_trace()
+        # remaining_expansion_data = torch.repeat_interleave(
+        #     remaining_expansion_data, repeats=required_repeats, dim=1
+        # )  # 1x8
+        remaining_expansion_data = remaining_expansion_data[:, :, None, :, :].expand(batch, orig_kv_heads, required_repeats, slen, head_dim).reshape(batch, orig_kv_heads*required_repeats, slen, head_dim)
         chunk_fill_size = n_rep * old_repeats  # -> 4
 
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    hidden_states = hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    # hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    # hidden_states = hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
     if rows_to_fill != 0:
         tensors_to_cat = []
@@ -625,20 +649,49 @@ class DreamBlockedAttention(DreamAttention):
             cos, sin = position_embeddings
         #ADDED HERE
         query_states, key_states = qeff_apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
+        # import ipdb; ipdb.set_trace()
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
+        # key_states = repeat_kv_text(
+        #     key_states,
+        #     1,#module.num_key_value_groups,
+        #     16,#num_key_value_heads=module.num_key_value_heads,
+        #     28,#num_attention_heads=module.num_heads,
+        #     4,#orig_kv_heads=module.orig_kv_heads,
+        # )
+        # value_states = repeat_kv_text(
+        #     value_states,
+        #     1,#module.num_key_value_groups,
+        #     16,#num_key_value_heads=module.num_key_value_heads,
+        #     28,#num_attention_heads=module.num_heads,
+        #     4,#orig_kv_heads=module.orig_kv_heads,
+        # )
+        #ADDED HERE
         attention_mask = attention_mask.bool()
+
+        # causal_mask = attention_mask
+        # if attention_mask is not None:  # no matter the length, we just slice it
+        #     causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
 
         # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
         # Reference: https://github.com/pytorch/pytorch/issues/112577.
-        
+        if query_states.device.type == "cuda" and attention_mask is not None:
+            query_states = query_states.contiguous()
+            key_states = key_states.contiguous()
+            value_states = value_states.contiguous()
+
+        #ADDED HERE
+        query_states = query_states.contiguous()
+        key_states = key_states.contiguous()
+        value_states = value_states.contiguous()
         blocking_mode, head_block_size, num_kv_blocks, num_q_blocks = get_attention_blocking_config()
+        # Apply blocking using pipeline_utils
         attn_output = compute_blocked_attention(
             query_states,
             key_states,
@@ -649,11 +702,22 @@ class DreamBlockedAttention(DreamAttention):
             num_q_blocks=num_q_blocks,
             attention_mask=attention_mask,
         )
-        
+        # attn_output_1 = torch.nn.functional.scaled_dot_product_attention(
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
+        #     dropout_p=self.attention_dropout if self.training else 0.0,
+        #     is_causal=False, # hard coded
+        # )
+        # print('Blocked vs unblocked diff: ', (attn_output - attn_output_1).abs().max())
+        # print('IN block attention ', attn_output.shape, query_states.shape, key_states.shape)
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
-        
+        #ADDED Here
+        # attn_output = hidden_states
+
         return attn_output, None, past_key_value
 
 
@@ -982,15 +1046,18 @@ def top_k_logits(logits, top_k=None):
     return logits
 
 def sample_tokens(logits, temperature, top_p, top_k, neg_entropy):
-    # logits = torch.where(temperature != 0, logits / temperature, logits)
     if temperature > 0:
         logits = logits / temperature
-    # if top_p is not None and top_p < 1:
-    #     logits = top_p_logits(logits, top_p)
     if top_k is not None:
-        logits = top_k_logits(logits, top_k)
-    probs = torch.softmax(logits, dim=-1)
+        # logits = top_k_logits(logits, top_k)
+        vals = torch.topk(logits, k=2, dim=-1, largest=True, sorted=True)
+        x0 = vals.indices[0][:,0]
+        vals2 = vals.values
+        confidence = vals2[0][:,0] - vals2[0][:,1]
+        print('top k is not none confidence ', confidence.shape, x0.shape, vals2.shape)
+    # probs = torch.softmax(logits, dim=-1)
 
+    '''
     if temperature > 0:
         confidence, x0 = probs.max(dim=-1)
         # try:
@@ -1017,7 +1084,7 @@ def sample_tokens(logits, temperature, top_p, top_k, neg_entropy):
         epsilon = 1e-10
         log_probs = torch.log(probs + epsilon)
         confidence = torch.sum(probs * log_probs, dim=-1)
-    
+    '''
     return confidence, x0
 
 class DreamSampler(nn.Module):
@@ -1033,16 +1100,16 @@ class DreamSampler(nn.Module):
         mask_index = (x == self.mask_token_id)
         logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
         # timesteps = timesteps.to(x.device)
-        mask_logits = torch.where(mask_index.unsqueeze(-1), logits, torch.tensor(0.0))
+        mask_logits = torch.where(mask_index.unsqueeze(-1), logits, -torch.inf)
         # t = timesteps[current_iter]
         # s = timesteps[current_iter + 1]
         confidence, x0 = sample_tokens(mask_logits, temperature=self.temperature, top_p=self.top_p, top_k=self.top_k, neg_entropy=self.entropy)
         confidence = confidence.unsqueeze(0)
         num_mask_token = mask_index.sum() / mask_index.shape[0]
         # number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else int(num_mask_token)
-        number_transfer_tokens = 2
+        number_transfer_tokens = 4
         full_confidence = torch.full_like(x, -torch.inf, device=x.device, dtype=logits.dtype)
-        full_confidence = torch.where(mask_index, confidence, full_confidence )
+        full_confidence = torch.where(mask_index, confidence, full_confidence)
         if number_transfer_tokens > 0:
             _, transfer_index = torch.topk(full_confidence, number_transfer_tokens)
             # if self.alg_temp == 0:

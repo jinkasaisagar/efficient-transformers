@@ -348,7 +348,7 @@ def build_transformer_blocking_config(
         _get_attr_or_key(model_config, ("hidden_size", "d_model", "model_dim", "attention_dim")), "hidden size"
     )
     intermediate = _require_value(
-        _get_attr_or_key(model_config, ("intermediate_size", "ffn_dim", "mlp_dim")), "intermediate size"
+        _get_attr_or_key(model_config, ("intermediate_size", "ffn_dim", "mlp_dim", "mlp_hidden_size")), "intermediate size"
     )
 
     num_socs = int(compile_config.get("mdp_ts_num_devices", 1))

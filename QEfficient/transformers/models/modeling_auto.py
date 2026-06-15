@@ -459,7 +459,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         """
         return self.model.config.__dict__
 
-    def export(self, sample_seq_len, export_dir: Optional[str] = None, **kwargs) -> str:
+    def export(self, sample_seq_len=1024, export_dir: Optional[str] = None, **kwargs) -> str:
         """
         Export the model to ONNX format using ``torch.onnx.export``.
 
@@ -490,7 +490,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         alg_temp = 0.1
         example_inputs = {
             "input_ids": torch.zeros((bs, seq_len), dtype=torch.int64),
-            "attention_mask": torch.ones((bs, seq_len), dtype=torch.int64)
+            "attention_mask": torch.ones((bs,1, seq_len, seq_len), dtype=torch.int64)
             # "current_iter": torch.tensor(iter),
             # "steps": torch.tensor(steps),
             # "temperature": torch.tensor(temperature),
@@ -501,7 +501,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             # "alg_temp": torch.tensor(alg_temp)
         }
 
-        dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}, "attention_mask": {0: "batch_size", 1: "seq_len"}, "logits": {0: "batch_size", 1: "seq_len"}}
+        dynamic_axes = {"input_ids": {0: "batch_size", 1: "seq_len"}, "attention_mask": {0: "batch_size", 2: "seq_len", 3:"seq_len"}, "logits": {0: "batch_size", 1: "seq_len"}}
 
         output_names = ["logits"]
 
@@ -510,7 +510,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             output_names,
             dynamic_axes,
             export_dir=export_dir,
-            verbose=True,
+            # verbose=True,
             use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
         )
     def export_dreamon(self, sample_seq_len, export_dir: Optional[str] = None, **kwargs) -> str:
@@ -567,7 +567,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             output_names,
             dynamic_axes,
             export_dir=export_dir,
-            verbose=True,
+            # verbose=True,
             use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
         )
 
@@ -1041,38 +1041,20 @@ class QEFFAutoModel(QEFFTransformersBase):
         eos_token_id = generation_config.eos_token_id
         pad_token_id = generation_config.pad_token_id
         steps = generation_config.steps
-        # steps = torch.tensor(generation_config.steps)
-        # eps = torch.tensor(generation_config.eps)
-        # alg = torch.tensor(generation_config.alg)
-        # alg_temp = torch.tensor(generation_config.alg_temp)
-        # temperature = torch.tensor(generation_config.temperature)
-        # top_p = torch.tensor(generation_config.top_p)
-        # top_k = generation_config.top_k
+        
         compile_length = generation_config.compile_length
         qpc_path = generation_config.qpc_path
         device_ids = generation_config.device_ids
-        # if alg == 'entropy':
-        #     entropy = torch.tensor(True)
-        # else:
-        #     entropy = torch.tensor(False)
 
         histories = [] if (return_dict_in_generate and output_history) else None
 
         # pad input_ids to max_length
         prompt_length = input_ids.shape[1]
-        # x = F.pad(input_ids, (0, generation_config.max_new_tokens), value=mask_token_id)
-        # x = F.pad(x,(0, compile_length - x.shape[1]), value=pad_token_id)
-        # breakpoint()
         x = F.pad(input_ids, (0, compile_length - input_ids.shape[1]), value=mask_token_id)
+        # attention_mask = torch.ones_like(x)
         print('Number of steps are ',steps)
 
-        if attention_mask is not None and torch.any(attention_mask == 0.0):
-            # we do not mask the [MASK] tokens so value = 1.0
-            attention_mask = F.pad(attention_mask, (0, max_length - attention_mask.shape[1]), value=1.0)
-            tok_idx = attention_mask.long().cumsum(-1) - 1
-            tok_idx.masked_fill_(attention_mask == 0, 1)
-            # attention_mask is of shape [B, N]
-            # broadcast to [B, 1, N, N]
+        if attention_mask is not None:
             attention_mask = torch.logical_and(
                 attention_mask.unsqueeze(1).unsqueeze(-2),
                 attention_mask.unsqueeze(1).unsqueeze(-1),
@@ -1081,80 +1063,26 @@ class QEFFAutoModel(QEFFTransformersBase):
             tok_idx = None
             attention_mask = "full"
 
-        # timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
-
-        # this allows user-defined token control of the intermediate steps
         x = generation_tokens_hook_func(None, x, None)
-        attention_mask = torch.ones_like(x)
         x = x.numpy()
-        attention_mask = F.pad(attention_mask, (0, compile_length - attention_mask.shape[1]), value=0.0)
-        attention_mask = attention_mask.numpy()
-        '''
-        example_inputs = {
-            "input_ids": torch.zeros((bs, seq_len), dtype=torch.int64),
-            # "attention_mask": torch.ones((bs, seq_len), dtype=torch.int64),
-            "steps": torch.tensor(500, dtype=torch.int64),
-            "temperature": torch.tensor(0.06, dtype=torch.float32),
-            "eps": torch.tensor(0.06, dtype=torch.float32),
-            "top_p": torch.tensor(0.06, dtype=torch.float32),
-            "top_k": torch.tensor(0.06, dtype=torch.float32),
-            "entropy":torch.tensor(1, dtype=bool),
-            "alg_temp": torch.tensor(0.06, dtype=torch.float32)
-        }
-        '''
-        
-        # for i in range(50):
+        attention_mask = attention_mask.numpy().astype(np.int64)
         for i in range(steps):
             start_time_iter = time.perf_counter()
-            # x.tofile("input_ids_16ts_1K.raw")
-            # attention_mask.tofile("attention_mask_16ts_1K.raw")
-            # exit()
             inputs = dict(input_ids=x, attention_mask = attention_mask)
             x = qpc_session.run(inputs)['logits']
             x = torch.tensor(x)
             x = generation_tokens_hook_func(None, x, None)
             x = x.numpy()
-            # print(x[:,-100:])
             
             mask_token_mask = (x == mask_token_id).any()
 
-            eos_mask  = (x == eos_token_id)#.any()
-            # breakpoint()
+            eos_mask  = (x == eos_token_id)
             eos_positions = np.where(eos_mask)
-            # first_eos_idx = eos_positions[-1][0]
             if len(eos_positions[0]) > 0:
                 first_eos_idx = eos_positions[-1][0]
                 x[:, first_eos_idx + 1:] = eos_token_id
             if not mask_token_mask:
                 break
-            '''
-            if eos_mask.any():
-                max_consecutive_eos = 0
-                eos_indices = np.where(eos_mask)
-                first_eos_idx = eos_indices[-1][0]
-                if len(eos_indices[-1]) > 72:
-                    eos_flat = eos_mask.flatten()
-                    current_consecutive = 0
-                    for is_eos in eos_flat:
-                        if is_eos:
-                            current_consecutive += 1
-                            max_consecutive_eos = max(max_consecutive_eos, current_consecutive)
-                        else:
-                            current_consecutive = 0
-                    if max_consecutive_eos > 40:
-                        print('Reached maximum limit consecutive of eos tokens')
-                        x[:,eos_indices[-1][1]:]=eos_token_id  
-                has_mask_before_eos = mask_token_mask[..., :first_eos_idx].any()
-            else:
-                has_mask_before_eos = False
-            
-
-            # print(f'Avg time till iteration %d is %f',i,average_time)
-            if eos_mask.any() and not has_mask_before_eos:
-                print(f'Generation complete at iteration {i}: EOS generated and no masks before EOS')
-                break
-            '''
-            # print(f'    time only postprocess is %f',i,total_time_postprocess)
             end_time_iter = time.perf_counter()
             total_time_network_sample = end_time_iter - start_time_iter
             print(f'Time only network, gradio at {i} iteration is {total_time_network_sample:.6f} for input_ids of length {x.shape[1]} ')
@@ -1163,10 +1091,6 @@ class QEFFAutoModel(QEFFTransformersBase):
         if return_dict_in_generate:
             return {'sequences': x,
                     'history': histories}
-            # return DreamModelOutput(
-            #     sequences=x,
-            #     history=histories,
-            # )
         else:
             return {'sequences': x}
 
@@ -1203,9 +1127,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             raise ValueError("No mask tokens found in the input_ids.")
         
         num_mask_tokens = mask_token_indices.numel()
-        ## get the first index of mask 
         mask_token_index = mask_token_indices[0]
-        ## assign it as prefix_len
         prefix_len = mask_token_index
         
         start_gen_len = num_mask_tokens  # Ensure start_gen_len is defined
@@ -1277,12 +1199,7 @@ class QEFFAutoModel(QEFFTransformersBase):
         return_dict_in_generate = generation_config.return_dict_in_generate
 
         pad_delete_to_right = generation_config.pad_delete_to_right
-        eps = generation_config.eps
-        alg = generation_config.alg
-        alg_temp = generation_config.alg_temp
-        temperature = generation_config.temperature
-        top_p = generation_config.top_p
-        top_k = generation_config.top_k
+        
         device = input_ids.device  
 
         num_generation_tokens = start_gen_len
@@ -1298,24 +1215,11 @@ class QEFFAutoModel(QEFFTransformersBase):
         delete_token_id = generation_config.delete_token_id  
         expand_token_id = generation_config.expand_token_id
         mask_token_id = generation_config.mask_token_id
-        # steps = torch.tensor(generation_config.steps)
-        # eps = torch.tensor(generation_config.eps)
-        # alg = torch.tensor(generation_config.alg)
-        # alg_temp = torch.tensor(generation_config.alg_temp)
-        # temperature = torch.tensor(generation_config.temperature)
-        # top_p = torch.tensor(generation_config.top_p)
-        # top_k = generation_config.top_k
+        
         compile_length = generation_config.compile_length
-        qpc_path = generation_config.qpc_path
-        device_ids = generation_config.device_ids
-        # if alg == 'entropy':
-        #     entropy = torch.tensor(True)
-        # else:
-        #     entropy = torch.tensor(False)
-
+        
         histories = [] if (return_dict_in_generate and output_history) else None
         # pad input_ids to max_length
-        # x = input_ids
         x = F.pad(input_ids, (0, compile_length - input_ids.shape[1]), value=eos_token_id)
 
         # for i in range(256):
@@ -1332,9 +1236,7 @@ class QEFFAutoModel(QEFFTransformersBase):
             tok_idx.masked_fill_(attention_mask == 0, 1)
 
             start_time_iter = time.perf_counter()
-            # x.tofile("input_ids_16ts_1K.raw")
-            # attention_mask.tofile("attention_mask_16ts_1K.raw")
-            # exit()
+            
             if histories is not None:
                 histories.append(x[0,:current_window_length].clone())
             inputs = dict(input_ids=x.numpy(), attention_mask = attention_mask.numpy(), position_ids= tok_idx.numpy())
@@ -3210,8 +3112,9 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
             If the provided `model` is not a CausalLM or LMHeadModel type.
         """
         model_class_name = model.__class__.__name__
-        if not (model_class_name.endswith("ForCausalLM") or model_class_name.endswith("LMHeadModel")):
-            raise TypeError(f"Required pytorch module for CausalLM or LMHeadModel, got {model_class_name}")
+        #This is commented for LLada
+        # if not (model_class_name.endswith("ForCausalLM") or model_class_name.endswith("LMHeadModel")):
+        #     raise TypeError(f"Required pytorch module for CausalLM or LMHeadModel, got {model_class_name}")
 
         # TODO: remove from version 1.20
         if kwargs.pop("full_batch_size", None):

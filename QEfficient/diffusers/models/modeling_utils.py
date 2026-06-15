@@ -66,13 +66,13 @@ def apply_head_blocking(
     # Get head blocking configuration
     head_block_size = head_block_size or NH
     num_head_blocks = math.ceil(NH / head_block_size)
-
+    # masked_tensor = torch.tensor(MIN_MASKED_ATTENTION_VALUE, dtype=mask_dtype, device=query.device)
     # Optimization: Handle small sequences with standard attention
     BS, NH, K_CL, DH = k.shape
     if K_CL <= 512:
         scores = torch.matmul(q, k.transpose(-2, -1)) * scale_factor
         if attention_mask is not None:
-            scores = torch.where(attention_mask, scores, torch.tensor(-1e4, dtype=scores.dtype, device=scores.device))
+            scores = torch.where(attention_mask, scores, torch.tensor(float("-inf"), dtype=scores.dtype, device=scores.device))
         probs = torch.softmax(scores, dim=-1)
         out = torch.matmul(probs, v)
         return out
@@ -91,6 +91,10 @@ def apply_head_blocking(
 
         # Compute full attention matrix for this head block
         qkblock = torch.matmul(q_g, k_g.transpose(-2, -1)) * scale_factor
+        # breakpoint()
+        # if attention_mask is not None:
+        #     print('In head blocking attention mask is not none')
+        #     qkblock = torch.where(attention_mask, qkblock, torch.tensor(-1e4, dtype=qkblock.dtype, device=qkblock.device)) 
 
         # Standard softmax computation
         probs = torch.softmax(qkblock, dim=-1)
