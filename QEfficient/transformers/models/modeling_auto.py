@@ -81,6 +81,7 @@ from QEfficient.utils import (
 from QEfficient.utils.check_ccl_specializations import process_ccl_specializations
 from QEfficient.utils.logging_utils import logger
 from QEfficient.utils.sampler_utils import get_sampling_inputs_and_outputs
+from QEfficient.transformers.llada_utils import _sample
 
 CUSTOM_IO_DTYPE_MAP = {
     torch.float16: "float16",
@@ -3725,6 +3726,38 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         str
             Path to the generated ONNX graph file.
         """
+        is_llada = "LLaDAModelLM" in (getattr(self.model.config, "architectures", None) or [])
+    
+        if is_llada:
+            bs: int = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
+            seq_len: int = 2500 # constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN
+            print('Inside is_llada model')
+            # LLada model export - no KV cache handling
+            example_inputs = {
+                "input_ids": torch.zeros((bs, seq_len), dtype=torch.int64),
+                "attention_mask": torch.arange(seq_len, dtype=torch.int64).view(1, seq_len).repeat(bs, 1).view(bs,1,1,seq_len),
+                "confidence_mask": torch.zeros((bs, seq_len), dtype=torch.int64),  
+            }
+            
+            dynamic_axes = {
+                "input_ids": {0: "batch_size", 1: "seq_len"},
+                "attention_mask": {0: "batch_size", 3: "seq_len"},
+                "confidence_mask": {0: "batch_size", 1: "seq_len"},
+            }
+            
+            output_names = []
+            output_names.append("logits")
+            
+            return self._export(
+                example_inputs,
+                output_names=output_names,
+                dynamic_axes=dynamic_axes,
+                export_dir=export_dir,
+                use_onnx_subfunctions=kwargs.get("use_onnx_subfunctions", False),
+                offload_pt_weights=kwargs.get("offload_pt_weights", True),
+                prefill_only=prefill_only,
+                # verbose=True
+            )
         if kwargs.pop("decode_only", False):
             raise NotImplementedError(
                 "decode_only=True is not supported by QEFFAutoModelForCausalLM.export(). "
@@ -4518,6 +4551,50 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         )
 
         return qpc_path
+
+    @torch.no_grad()
+    def llada_generate(
+        self,
+        inputs,
+        qpc_path,
+        device_path,
+        **kwargs,
+    ):
+        assert inputs is not None
+        input_ids = inputs
+        device = input_ids.device
+        attention_mask = kwargs.pop("attention_mask", None)
+        steps = kwargs.pop("steps", 0)
+        generation_length = kwargs.pop("generation_length", 0)
+        block_length = kwargs.pop("block_length", 0)
+        print(attention_mask)
+      
+        input_ids_length = input_ids.shape[-1]
+        qpc_path = qpc_path
+        device_ids = device_ids
+        qpc_session = QAICInferenceSession(str(qpc_path), device_ids=device_ids)
+        outputs = {
+                "logits": np.random.randn(*list(qpc_session.bindings[1].dims)).astype(np.int64),
+            }
+        outputs = {k: v.numpy() if isinstance(v, torch.Tensor) else v for k, v in outputs.items()}  
+        qpc_session.set_buffers(outputs)
+            
+        import time
+        start_time = time.perf_counter()
+        result = self._sample(
+            start_time,
+            qpc_session,
+            input_ids,
+            attention_mask=attention_mask,
+            steps = steps,
+            gen_length = generation_length,
+            block_length = block_length            
+            )
+        end_time = time.perf_counter()
+
+        total_time = end_time - start_time
+        average_time_per_iteration = total_time / generation_config.steps
+        return result, average_time_per_iteration
 
     # FIXME: Update this method to match with transformers AutoModelForCausalLM.generate
     def generate(

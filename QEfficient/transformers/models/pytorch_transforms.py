@@ -630,6 +630,14 @@ from QEfficient.transformers.models.whisper.modeling_whisper import (
     QEffWhisperModel,
     QEffWhisperPositionalEmbedding,
 )
+from QEfficient.transformers.models.llada.modeling_llada import (
+    QEffLLaDABlock,
+    QEffLLaDASequentialBlock,
+    QEffLLaDALlamaBlock,
+    QEffLLaDABlockGroup,
+    QEffLLaDAModel,
+    QEffLLaDAModelLM,
+)
 from QEfficient.transformers.post_processing import build_and_attach_mlp, model_type_registry
 from QEfficient.transformers.sampler.sampler import sampler_forward
 from QEfficient.transformers.spd.spd_transform_forward import tlm_forward
@@ -1173,6 +1181,24 @@ class KVCacheExternalModuleMapperTransform(ExternalModuleMapperTransform):
             "get_qeff_language_decoder": QEffInternVLModel.get_qeff_language_decoder,
         },
         "InternVisionEmbeddings": {"forward": QEffInternVisionEmbeddings.forward},
+        # Mapping for Llada
+        "RMSLayerNorm": {"forward": CustomRMSNormAIC.forward},
+        "LlaDABlock":{"attention": QEffLLaDABlock.attention}, 
+        "LLaDASequentialBlock":{"forward":QEffLLaDASequentialBlock.forward}, 
+        "LLaDALlamaBlock":{"forward":QEffLLaDALlamaBlock.forward}, 
+        "LLaDABlockGroup":{"forward":QEffLLaDABlockGroup.forward}, 
+        "LLaDALlamaBlock":{
+            "forward":QEffLLaDALlamaBlock.forward,
+            "attention": QEffLLaDABlock.attention
+            }, 
+        "LLaDAModelLM":{
+            "forward":QEffLLaDAModelLM.forward,
+            "__qeff_init__":QEffLLaDAModelLM.__qeff_init__
+        },
+        "LLaDAModel":{
+            "forward":QEffLLaDAModel.forward,
+            "__qeff_init__":QEffLLaDAModel.__qeff_init__
+        },
         # Mapping for Molmo
         "MolmoForCausalLM": {
             "forward": QEffMolmoModel.forward,
