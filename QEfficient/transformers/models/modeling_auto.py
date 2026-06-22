@@ -267,6 +267,7 @@ def diffusion_gemma_generate(
     decoder_qpc_path: Optional[Union[str, Path]] = None,
     **kwargs,
 ):
+    
     breakpoint()
     qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else qpc_path
     encoder_qpc_path = Path(encoder_qpc_path) if isinstance(encoder_qpc_path, str) else encoder_qpc_path

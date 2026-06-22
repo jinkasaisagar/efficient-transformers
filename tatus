@@ -1,0 +1,1861 @@
+[33mcommit 70f76f2c4d9ce3c30f30210393b925115ef8f25e[m[33m ([m[1;36mHEAD -> [m[1;32mllada_changes[m[33m)[m
+Author: jinkasaisagar <jsaisaga@qti.qualcomm.com>
+Date:   Mon Jun 22 09:18:06 2026 +0530
+
+    Diffusion gemma's initial version. Gemma3 is changed where logger is added.
+
+[33mcommit 5383b5f3a518457e4013eae21d7f64433c20cd66[m
+Author: jinkasaisagar <jsaisaga@qti.qualcomm.com>
+Date:   Mon Jun 15 15:41:37 2026 +0530
+
+    Llada files updated
+
+[33mcommit 6c7a25386c696bcdf4006f1ab290896f74c3272c[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Mon Jun 15 11:16:54 2026 +0530
+
+    Release/v1.22.0 tmp (#1029)
+    
+    Collection of PRs which include TF 5.5.4, Qwen 3.5, 3.6 Gemma 4 etc.
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+    Signed-off-by: asmigosw <asmigosw@qti.qualcomm.com>
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Signed-off-by: Vahid Janfaza <vjanfaza@qti.qualcomm.com>
+    Signed-off-by: sanising <sanising@qti.qualcomm.com>
+    Signed-off-by: eplatero <eplatero@qti.qualcomm.com>
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+    Signed-off-by: Amit Raj <amitraj@qti.qualcomm.com>
+    Signed-off-by: Mohit Soni <mohisoni@qti.qualcomm.com>
+    Signed-off-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+    Signed-off-by: Tanisha Chawada <tchawada@qti.qualcomm.com>
+    Signed-off-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Signed-off-by: abhishek-singh591 <sabhis@qti.qualcomm.com>
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+    Signed-off-by: quic-xiyushi <xiyushi@qti.qualcomm.com>
+    Co-authored-by: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+    Co-authored-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+    Co-authored-by: vjanfaza <vjanfaza@qti.qualcomm.com>
+    Co-authored-by: Sanidhya Singal <sanising@qti.qualcomm.com>
+    Co-authored-by: Erick Platero <40013722+eplatero97@users.noreply.github.com>
+    Co-authored-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+    Co-authored-by: Amit Raj <168538872+quic-amitraj@users.noreply.github.com>
+    Co-authored-by: Mohit Soni <quic_mohisoni@quicinc.com>
+    Co-authored-by: Mohit Soni <mohisoni@qti.qualcomm.com>
+    Co-authored-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+    Co-authored-by: Tanisha Chawada <tchawada@qti.qualcomm.com>
+    Co-authored-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+    Co-authored-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+    Co-authored-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Co-authored-by: Karthikeya <vtirumal@qti.qualcomm.com>
+    Co-authored-by: quic-xiyushi <xiyushi@qti.qualcomm.com>
+
+[33mcommit 7cd1085e557cd9d650b60902ad0f4a41e00a5ae5[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Tue Jun 2 11:43:02 2026 +0530
+
+    Revert "[WIP] Fix for acc issue in Qwen3 VL moe" (#1019)
+    
+    Reverts quic/efficient-transformers#1010
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 63e2c294fa021846abbd2a7431e626aed8a5f94d[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Tue Jun 2 11:38:16 2026 +0530
+
+    [WIP] Fix for acc issue in Qwen3 VL moe (#1010)
+    
+    Issue: Generated text is not accurate (unable to identify object in
+    given image)
+    5/25: Found a workaround, seems like compiler issue - debugging further
+    
+    ---------
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit 3fe26cba091bf4cf075c044c72b4b410a2136dc1[m
+Author: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+Date:   Wed May 27 20:54:27 2026 +0530
+
+    fix retry timeout (#1011)
+    
+    After inspecting the attributes of QAicProgramProperties:
+    SDK 1.22.0.120 -> ['dataPathTimeoutMs', 'devMapping', 'selectMask',
+    'submitNumRetries']
+    SDK 1.22.0.119 ->['SubmitNumRetries', 'SubmitRetryTimeoutMs',
+    'dataPathTimeoutMs', 'devMapping', 'selectMask', 'submitNumRetries']
+    SubmitRetryTimeoutMs is missing in 1.22.0.120, but present in
+    1.22.0.119.
+    Root Cause:
+    The attribute removal is introduced in LRT changes in 1.22.0.120 sdk.
+    
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+
+[33mcommit 7060054b745ea8db78437087a6fc422c8686685c[m
+Author: kdulla <kdulla@qti.qualcomm.com>
+Date:   Sun May 24 08:37:02 2026 +0530
+
+    CCL bugfix with new blocking interface (#1005)
+    
+    Previous changes to non-blocked attention forward were causing the
+    attention mask generated for CCL to not be correct in the standard
+    attention forward. Returned the updated attention mask from the
+    past_key_value_update helper function in order to fix this.
+    
+    ---------
+    
+    Signed-off-by: Kushal Dulla <quic_kdulla@quicinc.com>
+    Signed-off-by: Kushal Dulla <kdulla@qti.qualcomm.com>
+
+[33mcommit 2d07b6e64c9ddb44cdfc78305b3554fbb586ffd5[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Fri May 22 20:40:03 2026 +0530
+
+    (bugfix): Clarify CausalLM decode-only flag handling and fix PL=1 specialization naming (#1006)
+    
+    This PR verifies the reported Llama decode-only compile behaviour
+    
+    **Findings**:
+    
+    - `decode_only=True` is currently not supported by
+    `QEFFAutoModelForCausalLM.export()`.
+    - `retain_full_kv=True` is only applicable to specialized
+    disaggregated-serving models such as GPT-OSS/Kimi, and has no
+        effect for Llama.
+    - `prefill_seq_len=1` with prefill_only=False was incorrectly tagged as
+    Prefill in the generated specialization metadata.
+    
+    **Changes**:
+    
+    - Raise a clear `NotImplementedError `when `decode_only=True` is passed
+    to CausalLM export.
+    - Warn and ignore `retain_full_kv=True` for non-specialized models such
+    as Llama.
+    - Tag `prefill_seq_len=1 and prefill_only=False` specializations as
+    Decode.
+    - Add quickcheck unit coverage for unsupported decode_only, ignored
+    Llama retain_full_kv, and PL=1 decode specialization
+        naming.
+    
+    **Validation**:
+    
+      - Verified PL=1 now emits "name": "Decode" in specialization output.
+      - Added unit test and Ran focused quickcheck tests successfully:
+    - PYENV_VERSION=qeff pytest -q
+    tests/unit_test/models/test_model_quickcheck.py::TestCausalLMFlagDiagnostics
+    
+    cc: @quic-hemagnih @quic-rishinr
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+
+[33mcommit 1128a6893752d7db6c940ab5a0c8180cfc739ff1[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Fri May 22 15:40:01 2026 +0530
+
+    Subfunction changes qwen2 5 (#999)
+    
+    ## Performance Note
+    
+    When compiling the Qwen2.5 vision encoder with subfunctions enabled, a
+    performance degradation is observed. This is primarily due to a
+    computation within the VisionAttention module that remains invariant
+    across layers, resulting in unnecessary repeated execution and increased
+    runtime overhead.
+    
+    ---------
+    
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+
+[33mcommit af6865a245fd8497d92fe7242a1ccbbce47131ea[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Tue May 19 11:57:26 2026 +0530
+
+    Updated the ROPE dtype for custom_dtype (#989)
+    
+    ROPE dtype was set to torch.get_default_dtype() which was float32 by
+    default. Changed it to set the config's dtype which was set by user.
+    
+    ---------
+    
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+
+[33mcommit 3eb5f353f1d2a609f0066219f6f70879e4e89068[m
+Author: quic-vargupt <vargupt@qti.qualcomm.com>
+Date:   Mon May 18 11:26:03 2026 +0530
+
+    Add support for num_crops and valid_size from vLLM (#796)
+    
+    The following PR add support for `num_crops` and `valid_size` from vLLM
+    in override configs in case of E-PD.
+    
+    ---------
+    
+    Signed-off-by: Varun Gupta <vargupt@qti.qualcomm.com>
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit e08476649202bae74169f6dfca718db3356e240a[m
+Author: Sanidhya Singal <sanising@qti.qualcomm.com>
+Date:   Fri May 15 03:23:23 2026 -0700
+
+    Enable On Device Sampling for Qwen3ForCausalLM (#963)
+    
+    Add `QEffQwen3ForCausalLM` in the list of supported architectures for
+    `SamplerTransform` in order to enable On Device Sampling.
+    
+    Signed-off-by: quic-sanising <sanising@qti.qualcomm.com>
+
+[33mcommit 85be89d941c1176fa2c93653e0b682a7d4386666[m
+Author: Amit Raj <168538872+quic-amitraj@users.noreply.github.com>
+Date:   Fri May 15 12:38:49 2026 +0530
+
+    First Block Caching Infra for diffusers (#941)
+    
+    # Wan-AI/Wan2.2-T2V-A14B-Diffusers
+    
+    
+    1. Added support of Non-unified Wan transformers ( as for 720p, unified
+    approach was failing). This could be enabled using flag
+    use_unified=False
+    2. Added support of first-block caching for non-unified approach, which
+    can be enabled using flag enable_first_block_cache. Caching is only
+    enabled with non-unified approach.
+    3. Added test for both non-unified and caching
+    
+    Example-
+    ```
+    pipeline = QEffWanPipeline.from_pretrained(
+        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        use_unified=False,
+        enable_first_block_cache=True,
+        # Hidden-dimension downsampling used for first-block residual similarity check.
+        first_block_cache_downsample_factor=4,
+    )
+    ```
+    Result- 90p/16TS/81f
+    
+    <img width="560" height="307" alt="image"
+    src="https://github.com/user-attachments/assets/18997b0d-1ad3-473f-a609-5a8ae889d142"
+    />
+    
+    
+    # black-forest-labs/FLUX.1-schnell
+    
+    1. Enabled first block caching for flux
+    2. Caching can be enabled with flag `enable_first_block_cache`
+    3. Example-
+    ```
+    pipeline = QEffFluxPipeline.from_pretrained(
+        "black-forest-labs/FLUX.1-schnell",
+        enable_first_block_cache=True,
+        # Hidden-dimension downsampling used for first-block residual similarity check.
+        first_block_cache_downsample_factor=4,
+    )
+    
+    ```
+    4. Result-
+    height/width=256
+    <img width="834" height="581" alt="image"
+    src="https://github.com/user-attachments/assets/7c5ad891-5e42-4ccf-9efc-dd7f617fa3bb"
+    />
+    
+    ---------
+    
+    Signed-off-by: Amit Raj <amitraj@qti.qualcomm.com>
+
+[33mcommit 7f6e804b2d1d78f8a9a89fa9fa6dea284d9a1b01[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Fri May 15 09:48:36 2026 +0530
+
+    Removed custom_io passing for bf16 dtype case (#983)
+    
+    - Removed custom_io passing when running through bf16 dtype
+    - Removed BF16 Warning Emitted by QEfficient Despite BF16
+    
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+
+[33mcommit e4ea3a73a7e473cfdda5029a528b41abebee84db[m
+Author: Anuj Gupta <anujgupt@qti.qualcomm.com>
+Date:   Wed May 13 21:21:11 2026 +0530
+
+    Optimize attention blocking nested loops  (#957)
+    
+    changed the code from doing the exact same math repeatedly.
+    
+    Signed-off-by: Anuj Gupta <anujgupt@qti.qualcomm.com>
+
+[33mcommit ec243d5898a067b5433b438133367088bac0c33e[m
+Author: kdulla <kdulla@qti.qualcomm.com>
+Date:   Tue May 12 15:43:21 2026 +0530
+
+    Automatic Blocking Configurator Bugfix and Enabling skip_kv by default (#976)
+    
+    Fixed a minor issue in automatic blocking configurator that would drop
+    head blocking when requested. Added a unit test to validate blocking
+    modes after automatic configuration to catch similar bugs in the future.
+    
+    Also set skip_kv to be true by default since that is optimal behavior.
+    
+    ---------
+    
+    Signed-off-by: Kushal Dulla <kdulla@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+
+[33mcommit 8482408b718c182d74fda33933f4a5d007f62236[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Tue May 12 09:04:39 2026 +0530
+
+    updated blocking in diffusers with cross attention check instead of SL (#932)
+    
+    Instead of depending upon seq length 512, updated code to know cross
+    attention is True or False
+    
+    **Context:**
+    
+    - Self-attention: CL == K_CL, since Q, K, V are all derived from image
+    latents.
+    - Cross-attention: typically CL != K_CL, since Q comes from image
+    latents while K, V come from encoder/text tokens (fixed to 512 in WAN).
+    
+    **Reason for this change:**
+      - We are currently exporting 45P where CL = 252.
+    - In self-attention, K_CL = CL, so K_CL < 512; therefore, the old **K_CL
+    <= 512** condition was bypassing blocking in self-attention.
+    - The new condition makes behavior explicit by using attention type
+    (is_cross_attention) instead of relying on a length heuristic.
+    
+    ---------
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+
+[33mcommit 9db6fb447620863e0026d86b8da89ea68a0773c3[m
+Author: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+Date:   Sun May 10 23:10:36 2026 -0700
+
+    [Nightly CI]: Creating separate Pipeline for Nightly Jobs (#953)
+    
+    This pull request is created for adding the nightly pipeline.
+    
+    Note: will improve the nightly in future and previous result comparison
+    section will be added in the next PR.
+    
+    ---------
+    
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+
+[33mcommit ce1509e434923fca7d18cbd45656dce1bfeb4118[m
+Author: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+Date:   Fri May 8 20:53:13 2026 +0530
+
+    MLA : fix online/offline absorption (#965)
+    
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Co-authored-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+
+[33mcommit 5d753007a084ab3a03a5a76844e8e1e2743a097f[m
+Author: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+Date:   Fri May 8 19:05:26 2026 +0530
+
+    CB Bug fix for Qwen3VL Dense and basic cleaning of example script and Model File (#926)
+    
+    Issue: When running CB with single image multiple time with different
+    prompts it was working whereas with multiple images and prompts it was
+    failing.
+    
+    Resolution: The hidden states calculation was done with index [0] every
+    time as a result when the broadcasting was happening with batch size 4
+    it was taking the first image only and we were getting wrong output in
+    CB. Taking full hidden_states ensures the error does not occur.
+    
+    ---------
+    
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+
+[33mcommit a938b9e089c5f845fe9c241d8fcc5010f9021aa5[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Thu May 7 15:13:26 2026 +0530
+
+    Add SplitTensorsTransform to QEFFAutoModel to prevent >2GB protobuf export issue (#950)
+    
+    Add SplitTensorsTransform to QEFFAutoModel to prevent >2GB protobuf
+    exports
+    
+    FP16ClipTransform inlines external weights, causing large embedding
+    models (e.g. BAAI/bge-reranker-v2-m3) to exceed the 2GB ModelProto
+    parser limit in the AIC compiler
+    
+    Adding SplitTensorsTransform to _onnx_transforms spills large
+    initializers to sidecar *.onnx.data files. Updated existing tests
+    and added regression tests to verify external data spilling behavior.
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: asmigosw <asmigosw@qti.qualcomm.com>
+
+[33mcommit f9bbf40cd2009dae0637519a1fccb65aec10f91d[m
+Author: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+Date:   Tue May 5 14:27:40 2026 +0530
+
+    kimi-k2-minor-fix (#959)
+    
+    Signed-off-by: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+
+[33mcommit f71094f9401c557860f9f805db397bfca2a921d4[m
+Author: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+Date:   Thu Apr 30 15:01:14 2026 +0530
+
+    MLA Changes (#956)
+    
+    fix kv head replication
+    
+    ---------
+    
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Co-authored-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+
+[33mcommit f1d0dc8641d8b1bc8ec138315a8751f3829a90ff[m
+Author: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+Date:   Wed Apr 29 15:27:45 2026 +0530
+
+    MLA perf (#910)
+    
+    1. Added support for Kimi-K2 models with DeepSeek modeling.
+    2. Added MLA with/WO fusion
+    3. Implemented Dual Cache for compressed KV and k_rope
+    4. Introduced prefill-only MoE changes.
+    5. Implemented KV blocking and head blocking strategies.
+    6. Added replicate KV head transform for kimi-k2
+    7. Performance improvements for Multi-head LatentAttention (MLA)
+    8. Add support for subfunctions
+    9. Use generalized kv and h blocking for MLA
+    
+    ---------
+    
+    Signed-off-by: Onkar Chougule <ochougul@qti.qualcomm.com>
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Signed-off-by: Mamta Singh <168400541+quic-mamta@users.noreply.github.com>
+    Co-authored-by: Onkar Chougule <ochougul@qti.qualcomm.com>
+    Co-authored-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+
+[33mcommit 1142a6560c77bcbf7f848c5dca2e2160279ac6aa[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Wed Apr 29 15:02:04 2026 +0530
+
+    Compile_only flag removal (#946)
+    
+    Removed compile_only flag from compilation configs and helper
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 221404c46a408244dfc977a0503bf4b150eca791[m
+Author: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+Date:   Fri Apr 24 23:22:04 2026 +0530
+
+    [Tests]: gemma3 tests are enabled (#918)
+    
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+
+[33mcommit 4940d3a0f80cf287bdc5e51745d39d779911d537[m
+Author: sudheepm-wq <mandavasudheep@gmail.com>
+Date:   Fri Apr 24 11:08:42 2026 +0530
+
+    Fix: Add **kwargs to QEffLlama4VisionModel.forward() for transformers v4.57.3 compatibility (#933)
+    
+    ## Problem
+    After the transformers v4.57.3 rebase (commit 7acb860), the following
+    error occurs:
+    TypeError: QEffLlama4VisionModel.forward() got an unexpected keyword
+    argument 'vision_feature_layer'
+    
+    ## Root Cause Analysis
+    1. In transformers v4.57.3,
+    Llama4ForConditionalGeneration.get_image_features()
+    now passes additional parameters (vision_feature_layer and
+    vision_feature_select_strategy)
+       to the vision model's forward method via **kwargs.
+    
+    2. The call chain:
+    - QEffLlama4EncoderWrapper.forward() calls
+    self.model.get_image_features()
+    - get_image_features() (from transformers library) calls
+    self.vision_model(**kwargs)
+       - QEffLlama4VisionModel.forward() was not accepting **kwargs
+    
+    3. Since QEffLlama4VisionModel overrides the forward() method but didn't
+    accept **kwargs,
+       it raised a TypeError when these unexpected arguments were passed.
+    
+    ## Solution
+    Added **kwargs parameter to QEffLlama4VisionModel.forward() method
+    signature.
+    This allows the method to accept vision_feature_layer and
+    vision_feature_select_strategy
+    parameters from the parent class's get_image_features() method, even
+    though they're
+    not used in the QEff implementation.
+    
+    ## Impact
+    - Backward compatible change
+    - Fixes ONNX export failures for Llama4 vision models
+    - Maintains compatibility with transformers v4.57.3 API
+    
+    Tested with: examples/image_text_to_text/models/llama4/single_image.py
+    
+    Signed-off-by: sudheepm <sudheepm@qti.qualcomm.com>
+    Co-authored-by: sudheepm <sudheepm@qti.qualcomm.com>
+
+[33mcommit 15f82315f92586aa5ef89481faa7085c8e8c930d[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Tue Apr 21 23:29:14 2026 -0400
+
+    feat(rope_fix): Hoist layer-invariant RoPE indexing out of decoder subfunctions for cached text models (#928)
+    
+    ## Summary
+    
+    This change moves layer-invariant RoPE cos/sin indexing out of repeated
+    decoder-layer subfunctions and into model-level forward paths.
+    
+    For cached decoder models, we were repeatedly doing:
+    
+    ```
+    cos = cos[position_ids].unsqueeze(1)
+    sin = sin[position_ids].unsqueeze(1)
+    ```
+    
+    inside each decoder attention block. With ONNX subfunctions enabled,
+    that indexing becomes part of the exported repeated subfunction body and
+    contributes to the on-device regression we observed after the
+    single-subfunction Rope Fix work #880 .
+    
+    This patch hoists that work once per forward pass and passes the
+    already-shaped cos/sin tensors into each decoder layer.
+    
+    ## What changed
+    
+    Applied the refactor to the applicable QEff model families that thread
+    static cached RoPE tensors through repeated decoder layers, including:
+    
+    - Llama
+    - Llama SwiftKV
+    - Gemma
+    - Gemma2
+    - Mistral
+    - Falcon
+    - GPT-OSS
+    - Granite
+    - GraniteMoE
+    - Mllama text path
+    - Mixtral
+    - Olmo2
+    - Phi3
+    - Qwen2
+    - Qwen3
+    - Qwen3 MoE
+    - Qwen2.5 VL text path
+    - Qwen3 VL text path
+    - Qwen3 VL MoE text path
+    
+    For the Qwen VL text towers, the same idea is applied to the
+    indexed/interleaved MRoPE preparation: the already-indexed cos/sin
+    tensors are prepared once before the decoder-layer loop and reused
+    across layers.
+    
+    ## Tests
+    
+    Added a TinyLlama regression test to assert that export with
+    subfunctions still produces a single decoder-layer ONNX function.
+    
+    Verified:
+    
+    `python -m pytest -q tests/unit_test/models/test_model_quickcheck.py -n
+    auto`
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 5231e9127ff06603300cfad8f82f6a93f38f6c54[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Tue Apr 21 04:13:16 2026 -0400
+
+    feat: Named graph specializations in specializations.json (Prefill/Decode/Vision/Encoder/Embedding) (#904)
+    
+    ## Summary
+    The backend compiler team requested a new specializations.json format
+    where each entry carries a meaningful graph name (e.g. "Prefill",
+    "Decode")
+    
+      ## Changes
+    - **`QEfficient/utils/_utils.py`** — new `_infer_specialization_name()`
+    and `to_named_specializations()` helpers
+    - **`QEfficient/base/modeling_qeff.py`** — `_compile()` uses new format
+      - **`QEfficient/compile/qnn_compiler.py`** — QNN path uses new format
+    - **`QEfficient/compile/compile_helper.py`** — legacy
+    `create_and_dump_specializations()` uses new format
+    
+      ## Name inference rules
+      | Keys present | Assigned name |
+      |---|---|
+      | `vision_size` / `img_size` / `grid_*`, no `seq_len` | `Vision` |
+      | `encoder_ctx_len`, no `seq_len` | `Encoder` |
+      | `sequence_length`, no `seq_len` | `Embedding` |
+      | `seq_len != 1` | `Prefill` |
+      | `seq_len == 1` | `Decode` |
+      | anything else | `Graph_N` |
+    
+    ## Testing
+    21-unit tests added to `tests/unit_test/models/test_model_quickcheck.py`
+    covering causal LM, continuous batching, VLM vision/language, Whisper,
+    encoder/decoder, text embedding, and end-to-end JSON roundtrip.
+    
+    cc: @anujgupt-github @quic-rishinr
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit c0a405facfccf127a3341bf6f9c77b0929707fba[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Sat Apr 18 09:04:21 2026 +0530
+
+    Adding fix for rope issue in Qwen3_vl_moe (#919)
+    
+    Model: Qwen/Qwen3-VL-30B-A3B-Instruct
+    
+    Adding changes to fix disagg mode 3 qpc output issue
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit 12205a1a910b92bcfe116bd1911fc0da40f17736[m
+Author: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+Date:   Fri Apr 17 13:32:16 2026 +0530
+
+    [CI-Jenkins]: Rebase 903 (#917)
+    
+    In this PR,
+    I have created 3 test pipelines: dummy model execution, few layers
+    execution, and full layer model execution.
+    
+    ---------
+    
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+
+[33mcommit 4f6f3364862f529a8c324b0f1df60fad5c7755de[m
+Author: kdulla <kdulla@qti.qualcomm.com>
+Date:   Thu Apr 16 15:45:24 2026 +0530
+
+    Bugfixes for Causal Blocking (#916)
+    
+    Slight change to remove redundant tests and to ensure than when
+    exporting with both blocking and subfunction, we do not see extra
+    subfunctions in the model.
+    
+    ---------
+    
+    Signed-off-by: Kushal Dulla <kdulla@qti.qualcomm.com>
+
+[33mcommit 410d21bb959edc672952a7a272f70ce695197bc4[m
+Author: kdulla <kdulla@qti.qualcomm.com>
+Date:   Tue Apr 14 18:09:00 2026 +0530
+
+    Enable causal blocking (#908)
+    
+    **Summary**
+    
+    - This PR introduces QEfficient attention blocking for causal language
+    models, adding Head, Batch, KV and Q blocking strategies that preserve
+    numerical outputs and scalability at long sequence lengths.
+    - New PR made to avoid rebase issues
+    
+    **Key Features**
+    
+    - KV Blocking: Blocked compute over KV cache along sequence dim.
+    - Q Blocking: Blocked compute over query sequence.
+    - Head Blocking: Blocked compute over num heads, based on TS
+    - Batch Blocking: Blocked compute over batch, still needs compiler
+    changes to work correctly so not auto computed by default, must be
+    manually passed.
+    - Currently, Configurable via qaic_config (explicit or auto). Blocking
+    is disabled by default but can be enabled by passing "enable_blocking":
+    True via qaic_config
+    - Created a generic interface for attention that can be called across
+    different models for easier extension of attention methods in the
+    future.
+    - Supported Model Architectures for Blocking:
+      - Llama3
+      - Gpt-oss
+      - Gemma
+      - Gemma2
+      - Granite
+      - GraniteMOE
+      - Mistral
+      - Mixtral
+      - MPT
+      - Qwen2
+      - Qwen3 (text only)
+      - Qwen3MOE (text only)
+      - Qwen3.5VL
+      - Qwen3.5VL MOE
+      - Starcoder
+    
+    **WIP**
+    - [X] Implement the Auto Blocking
+    - [X] Unit tests
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Signed-off-by: Kushal Dulla <quic_kdulla@quicinc.com>
+    Signed-off-by: Kushal Dulla <kdulla@qti.qualcomm.com>
+    Co-authored-by: vbaddi <vbaddi@qti.qualcomm.com>
+
+[33mcommit 3992d3c1daf058d2e2f1399fd111ed3aec9b29d2[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Tue Apr 14 11:31:21 2026 +0530
+
+    Added fp16/bf16 based export and compile support for VLMs (#819)
+    
+    Added fp16/bf16 based export and compile support for VLMs
+    
+    ---------
+    
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+    Signed-off-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+    Signed-off-by: asmigosw <asmigosw@qti.qualcomm.com>
+    Co-authored-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+
+[33mcommit dfaf31bdaca8c5612928178cda7b4f4820194329[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Mon Apr 13 16:36:21 2026 +0530
+
+    Added NPI files (#837)
+    
+    Added NPI files for models:
+    
+    - Qwen/Qwen2.5-VL-32B-Instruct-AWQ
+    - openai/whisper-large-v3-turbo
+    - facebook/wav2vec2-base-960h
+    - Qwen/Qwen3-30B-A3B-Instruct-2507
+    
+    ---------
+    
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+
+[33mcommit 0f933dc961699c48a16039ee1a50a6b140d89c09[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Fri Apr 10 18:44:16 2026 +0530
+
+    Unit test workflow (#878)
+    
+    Added unit test git workflow.
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit d02f71759297d152f99b28d7f44f037fbcf4d3d1[m
+Author: Tanisha Chawada <tchawada@qti.qualcomm.com>
+Date:   Fri Apr 10 11:31:56 2026 +0530
+
+    Updating wav2vec2_inference for batched_input (#781)
+    
+    Updating wav2vec2 for batched_input and adding args for parsing
+    batch_size, ctx_len and num_devices
+    
+        model.compile(batch_size=args.batch_size,
+                      num_devices=args.num_devices,
+                      seq_len=args.seq_len,
+                      num_cores=args.num_cores)
+    
+    ---------
+    
+    Signed-off-by: Tanisha Chawada <tchawada@qti.qualcomm.com>
+
+[33mcommit 80d28e8e508f1caf38d7c12071400d1a9ee58413[m
+Author: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+Date:   Tue Apr 7 14:44:10 2026 +0530
+
+    Qwen3Vl (#801)
+    
+    1. Added Support for Qwen3-VL
+    2. Added Support for Qwen3-VL-Moe
+    3. Added Support for Disaggregated VL MOE Model. (Three QPC )
+    4. CB support
+    
+    ---------
+    
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+    Signed-off-by: Dipankar Sarkar <quic_dipankar@quicinc.com>
+    Signed-off-by: Onkar Chougule <ochougul@qti.qualcomm.com>
+    Signed-off-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+    Co-authored-by: Onkar Chougule <168134249+ochougul@users.noreply.github.com>
+    Co-authored-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+    Co-authored-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit 7acb8605b77fe21fd0d0ce401b47dbe751f29950[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Fri Apr 3 23:08:50 2026 +0530
+
+    feat(rebase + unify subfunctions): rebase to transformers v4.57.3 and align the subfunction changes. (#882)
+    
+    This PR rebases dev/rebase_transformers_v4_57_3 onto main and
+    consolidates our transformer rebase changes with the PR #880
+    subfunction/KV alignment so we keep the branch simpler and unify the
+    subfunction approach.
+    
+      ### What changed
+    
+    
+      - KV/subfunction alignment:
+    - Applied PR #880-style wrapper changes for causal model families to
+    reduce divergence from mainline.
+    - Removed local resolve_kv_seq_len usage from remaining wrappers
+    (grok_1, molmo) to match the cache-native pattern used elsewhere.
+    - Removed now-unused helper resolve_kv_seq_len from
+    QEfficient/utils/_utils.py.
+      - Unit test updates:
+    - Added a new quickcheck unit test for use_onnx_subfunctions=True that
+    validates decoder-block subfunction cardinality per causal model.
+    - Important: test counts only decoder model block functions (via
+    get_submodules_for_export()), not all ONNX helper functions, so the
+    assertion tracks the intended behavior.
+    
+      ### Decoder-block subfunction status (causal model list)
+    
+    - Single decoder-block subfunction: falcon, gpt2, gptj, granite, llama,
+    mistral, mpt, olmo2, phi3, qwen2
+    - Multiple decoder-block subfunctions: codegen, gpt_oss, mixtral, phi
+    (Phi-1), starcoder2
+    
+      ### Tests verified
+    
+    ```
+    python -m pytest -q tests/unit_test/models/test_model_quickcheck.py -n auto
+    Result after subfunction-count + KV-helper cleanup: 75 passed, 1 skipped
+    ```
+    
+    cc: @anujgupt-github @quic-hemagnih
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+    Signed-off-by: abhishek-singh591 <sabhis@qti.qualcomm.com>
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+    Co-authored-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+    Co-authored-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+    Co-authored-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Co-authored-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit c36329cdb9d770a3d9a4dd61b9af43955d7fd61b[m[33m ([m[1;31morigin/dream-branch_v2[m[33m)[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Fri Apr 3 10:19:02 2026 +0530
+
+    Revert "feat: Named graph specializations in specializations.json (Prefill/Decode/Vision/Encoder/Embedding)" (#902)
+    
+    Reverts quic/efficient-transformers#894
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit eeb2eafd8ad312f875648b087f25878c77c9940d[m
+Author: Anuj Gupta <anujgupt@qti.qualcomm.com>
+Date:   Thu Apr 2 10:20:24 2026 +0530
+
+    Delete notebooks directory (#896)
+    
+    Largely covered by
+    https://github.com/quic/efficient-transformers/tree/main/examples
+    
+    No need to maintain these notebooks
+    
+    Signed-off-by: Anuj Gupta <anujgupt@qti.qualcomm.com>
+
+[33mcommit cc07ab081416673dbe4a68dc3f1bcfa03dfef86e[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Thu Apr 2 09:06:45 2026 +0530
+
+    feat: Named graph specializations in specializations.json (Prefill/Decode/Vision/Encoder/Embedding) (#894)
+    
+    ## Summary
+    The backend compiler team requested a new specializations.json format
+    where each entry carries a meaningful graph name (e.g. "Prefill",
+    "Decode")
+    
+      ## Changes
+    - **`QEfficient/utils/_utils.py`** — new `_infer_specialization_name()`
+    and `to_named_specializations()` helpers
+    - **`QEfficient/base/modeling_qeff.py`** — `_compile()` uses new format
+      - **`QEfficient/compile/qnn_compiler.py`** — QNN path uses new format
+    - **`QEfficient/compile/compile_helper.py`** — legacy
+    `create_and_dump_specializations()` uses new format
+    
+      ## Name inference rules
+      | Keys present | Assigned name |
+      |---|---|
+      | `vision_size` / `img_size` / `grid_*`, no `seq_len` | `Vision` |
+      | `encoder_ctx_len`, no `seq_len` | `Encoder` |
+      | `sequence_length`, no `seq_len` | `Embedding` |
+      | `seq_len != 1` | `Prefill` |
+      | `seq_len == 1` | `Decode` |
+      | anything else | `Graph_N` |
+    
+    ## Testing
+    21-unit tests added to `tests/unit_test/models/test_model_quickcheck.py`
+    covering causal LM, continuous batching, VLM vision/language, Whisper,
+    encoder/decoder, text embedding, and end-to-end JSON roundtrip.
+    
+    cc: @anujgupt-github
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+
+[33mcommit d7845bf6724ac42c075ae5138cf34e4e587a5e9a[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Wed Apr 1 16:59:18 2026 +0530
+
+    Disabled FT CI until eager fix (#898)
+    
+    Disabled FT CI until eager fix merge.
+    
+    Signed-off-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
+
+[33mcommit 70eb16e793007913be17775faaa00c5a8c846417[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Mon Mar 30 09:33:12 2026 +0530
+
+    Updating Wan Vae pytest, Export to 45p, minor issues (#783)
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit 5c1866f71f0ba1cf835efa2f12cd587dd37e4a02[m
+Author: vjanfaza <vjanfaza@qti.qualcomm.com>
+Date:   Fri Mar 27 05:23:27 2026 -0700
+
+    Adding the support of CCL to the Prefilling of Disaggregated Serving (#825)
+    
+    In this PR, I have added the support of CCL during prefilling of
+    Disaggregated Serving. In the current version, we only have the support
+    of CCL during decoding of DA which results in very high TTFT for larger
+    Context Lengths. With this added we can compile the model with the
+    largest CL and yet get good TTFT for smaller PL using the related CCL
+    value instead of CL.
+    These changes don't affect other applications and are only related to
+    Disaggregated Serving and only prefilling of Disaggregated Serving.
+    
+    ---------
+    
+    Signed-off-by: Vahid Janfaza <vjanfaza@qti.qualcomm.com>
+
+[33mcommit 895d9878f018f4cd29cbff8c9002c3b76e23ad00[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Thu Mar 26 21:31:55 2026 +0530
+
+    Rope Fix for a single subfunction signature (#880)
+    
+    ## Summary
+    
+    This PR introduces the **Rotary Position Embedding (RoPE) fix**,
+    ensuring that models generate a **single unified subfunction signature**
+    during ONNX export.
+    
+    ## Models Status After Applying the Fix
+    
+    ### Models now producing a single subfunction signature
+    _All causal LMs tested in the associated test file are functioning
+    correctly, except those listed below._
+    
+    ### Models still producing **two different subfunction signatures**
+    The following models continue to emit multiple subfunction signatures
+    and require additional investigation:
+    - [ ] Phi-1
+    - [ ] StarCoder2
+    - [ ] CodeGen
+    
+    ### Models with issues **unrelated** to the RoPE fix
+    These models have separate problems that need to be addressed
+    independently:
+    
+    - [ ] Granite-MoE
+    - [ ] GPT-OSS
+    - [ ] Mixtral
+    
+    ---------
+    
+    Signed-off-by: abhishek-singh591 <sabhis@qti.qualcomm.com>
+    Signed-off-by: Onkar Chougule <ochougul@qti.qualcomm.com>
+    Co-authored-by: Onkar Chougule <ochougul@qti.qualcomm.com>
+
+[33mcommit 32a2235fad9716e30ca7c80bd68be8cfc488af2d[m
+Author: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+Date:   Thu Mar 26 13:31:14 2026 +0530
+
+    [CI-Time]: Adding dummy Models to Improve Tests Time (#814)
+    
+    CI test update to reduce the time taken for each models
+    
+    ---------
+    
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+    Signed-off-by: Abukhoyer SHaik <abukhoye@qti.qualcomm.com>
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Signed-off-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
+    Co-authored-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
+
+[33mcommit a0711428a9324f8bc3a72681e13b6d4d194911b2[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Thu Mar 26 13:23:20 2026 +0530
+
+    fix(embedding): restore default FP16Clip transform for automodel (#881)
+    
+    This PR restores FP16ClipTransform for embedding models
+    (`QEFFAutoModel`) in the default (non-proxy) path, while preserving
+    existing proxy-gated behavior for other model categories.
+    
+    ### What changed
+    - Added per-model support for always-on ONNX transforms in proxy
+    configuration.
+    - Set embedding models to always keep FP16ClipTransform enabled by
+    default.
+    - Embedding accuracy on HW depends on FP16 clipping, so clip must remain
+    enabled for embedding even when proxy is disabled.
+    
+    ### Tests verified
+    
+    - `python -m pytest -q tests/unit_test/models/test_model_quickcheck.py
+    -k "test_text_embedding_fp16_clip_transform_and_export"`
+    
+    cc: @anujgupt-github @quic-rishinr @quic-hemagnih
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+
+[33mcommit 0423da64832344dbb324053cf71fc99630675c66[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Wed Mar 25 14:39:36 2026 +0530
+
+    Removed by default code owners (#883)
+    
+    Removed code owner getting assigned by default
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit ea234987963a3197de427537d45069d615ee8354[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Wed Mar 25 10:15:18 2026 +0530
+
+    Wan I2V support (#788)
+    
+    Support for Wan Image to video model
+    Model card:  "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+    
+    ---------
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit f668b4066c6c8db40b79d6fa24cfdd22f3ed7790[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Tue Mar 24 16:24:59 2026 +0530
+
+    PR report (#877)
+    
+    Updated the PR report to include charts
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+
+[33mcommit 60005ac35a6f8939ccdb0ceaa82316c85ab1c0bd[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Tue Mar 24 13:57:12 2026 +0530
+
+    nit(transforms): Fix ONNX export reuse and expand causal LM subfunction compile coverage (#873)
+    
+    This PR tightens the ONNX export path in modeling_qeff and updates
+    quickcheck coverage.
+    
+      **Changes:**
+    - Validate cached ONNX before reuse and re-export if the cached file is
+    invalid.
+    - Use instance-level transform names for hashing/metadata so export
+    cache reflects the
+        active transform set.
+    - Only pass onnx_base_dir when ONNX transforms actually need external
+    tensor data
+    (FP16ClipTransform / SplitTensorsTransform), avoiding unnecessary tensor
+        materialization in the default path.
+    - Keep the lightweight onnx_transforms guard so external data is only
+    loaded when a
+        base dir is provided.
+    
+      **Tests**:
+    
+      - Removed the use_dynamo quickcheck case.
+    - Added .compile(..., use_onnx_subfunctions=True) mocked compile-path
+    coverage for all
+        causal-LM quickcheck models.
+      - Full quickcheck validation passed:
+          - python -m pytest -q tests/test_model_quickcheck.py -n auto
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Co-authored-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 95524d9c99c341f79be9d15ab919052e5fb12cb0[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Wed Mar 18 14:11:01 2026 +0530
+
+    PR report (#867)
+    
+    Added code for generating PR report.
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 763fedda7077f6f2557b0105731331d5462695ca[m
+Author: Vinayak Baddi <68580231+vbaddi@users.noreply.github.com>
+Date:   Tue Mar 17 23:00:25 2026 +0530
+
+    feat(export): Enable proxy-only clip/split transforms and improve large-model ONNX export behavior (#861)
+    
+    ### Summary
+    
+    This PR changes ONNX transform behavior so FP16ClipTransform and
+    SplitTensorsTransform are no longer applied by default. They are now
+    enabled only when enable_proxy=True, matching proxy-sharing/testing
+    needs while keeping production exports simpler.
+    
+    
+      ### What Changed
+    
+      - Proxy-gated ONNX transforms
+    - Added centralized transform gating in
+    QEfficient/transformers/models/modeling_auto.py.
+    - Default path removes clip/split transforms from instance
+    _onnx_transforms.
+    - Proxy path re-enables clip/split and adds proxy module transform.
+      - enable_proxy propagation
+    - Ensured enable_proxy is consistently popped from HF kwargs and passed
+    only to QEFF wrappers.
+      - Export path updates
+    - Updated QEfficient/base/modeling_qeff.py to export directly to final
+    export_dir.
+          - Removed costly external-data-to-inline conversion path.
+    - Kept external data files alongside final ONNX for non-proxy flow.
+      - Quickcheck coverage
+          - Added transform policy assertions for:
+              - causal-lm
+              - embedding
+              - whisper
+              - vlm
+    - Added causal-lm subfunction export checks for all quickcheck causal
+    models.
+    - Added GPT-2 check with both enable_proxy=True and
+    use_onnx_subfunctions=True.
+    
+      ### Validation
+    
+    - python -m pytest -q tests/test_model_quickcheck.py -k proxy_toggle -n
+    auto → passed
+    - python -m pytest -q tests/test_model_quickcheck.py -k
+    "causal_subfunction_export_smoke_all_models or
+        causal_subfunction_and_proxy_export_smoke_gpt2" -n auto → passed
+      - python -m pytest -q tests/test_model_quickcheck.py -n auto → passed
+    
+    cc: @anujgupt-github @quic-rishinr @quic-hemagnih
+    
+    ---------
+    
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Co-authored-by: vbaddi <vbaddi@qti.qualcomm.com>
+
+[33mcommit 2f9675ced301f7499c6049726ae0418df0a83b67[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Tue Mar 17 11:50:33 2026 +0530
+
+    CPU pytest unit test suite (#852)
+    
+    Pytest unit tests designed as a preflight before submitting a PR. Runs
+    fully on CPU and focuses on module level testing, transformation
+    correctness, and accuracy comparison between HF, transformed HF, and ORT
+    for representative models.
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Signed-off-by: vbaddi <vbaddi@qti.qualcomm.com>
+    Co-authored-by: vbaddi <vbaddi@qti.qualcomm.com>
+
+[33mcommit 652351b078f0ec576e9588f781bb4b3c42235d65[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Fri Mar 13 12:06:27 2026 +0530
+
+    Removed urllib and multidict (#846)
+    
+    Removed following packages from pyproject.toml
+    multidict==6.0.4
+    urllib3<2
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 815309ec80339183e321821bc75bcd19f5b916a3[m
+Author: Joydip Biswas <138361777+jd316@users.noreply.github.com>
+Date:   Wed Mar 11 09:27:24 2026 +0530
+
+    fix(cloud.infer): reduce Qwen3-MoE export OOM risk (#821)
+    
+    Summary
+    - Keep `use_onnx_subfunctions` disabled by default in
+    `QEfficient.cloud.infer`
+    - Provide explicit opt-in via `--use-onnx-subfunctions` only
+    - Remove `--no-use-onnx-subfunctions`
+    - Update infer unit tests for explicit-enable and default-disabled
+    behavior
+    - Update quick-start and text-generation docs to reflect explicit opt-in
+    behavior
+    
+    Why
+    - Align infer behavior with reviewer feedback to keep defaults unchanged
+    and avoid model-specific auto-enable behavior.
+    
+    Fixes
+    - Fixes #702
+    
+    Validation
+    - `python -m py_compile QEfficient/cloud/infer.py
+    tests/cloud/test_infer.py`
+    - `ruff check QEfficient/cloud/infer.py tests/cloud/test_infer.py`
+    - `pytest -q tests/cloud/test_infer.py -m "not on_qaic"` (2 passed, 5
+    deselected)
+    
+    ---------
+    
+    Signed-off-by: jd316 <jd316biswas@gmail.com>
+
+[33mcommit 3d0d6637592496d6d1bc29992490540a357830f5[m
+Author: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+Date:   Tue Mar 10 21:50:35 2026 +0530
+
+    Adding dissagg mode support to Qwen3Moe (#682)
+    
+    #672
+    
+    **Adding disagg support to Qwen3Moe**
+    
+    > Config used
+    
+    PL =128
+    
+    CL=128*3
+    
+    
+    <img width="726" height="1077" alt="image"
+    src="https://github.com/user-attachments/assets/7b9afa00-8505-4df5-9a91-68b55e89b416"
+    />
+    
+    ---------
+    
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+
+[33mcommit 85b0cf0007cbdf31959377961e87c04172760b0b[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Mon Mar 9 15:36:26 2026 +0530
+
+    Upgrade python version from 3.10 to 3.12 (#782)
+    
+    updating the Qeff python version to 3.12 still keeping support for 3.10
+    3.11.
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+
+[33mcommit 300b25255bf222541a40c1323ac08f50b6ba829d[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Mon Mar 9 15:34:12 2026 +0530
+
+    Removed git workflow and email test changes (#836)
+    
+    Removed git workflow and email test changes as we are moving to Jenkin
+    based approach
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit ab920b22d46bf674cbc07bb982a3dac718d3c5c4[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Thu Mar 5 23:10:30 2026 +0530
+
+    Updated SMPT server (#830)
+    
+    Updated the SMPT server
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 94f233ea8fdfce6c1a9159f1015a3094f286b58f[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Thu Mar 5 22:58:14 2026 +0530
+
+    Daily PR report workflow and email notification system (#824)
+    
+    Automated daily PR dashboard that generates report of all open pull
+    requests and emails it to a configured list of recipients.
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 33c8ff7abe2e09615e69675fb9791b1df99946e5[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Wed Mar 4 14:36:06 2026 +0530
+
+    Updated FT docs (#822)
+    
+    Minor updates for better rendering in FT docs
+    
+    ---------
+    
+    Signed-off-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
+
+[33mcommit 9bcab61329631c32e7cc6fb65e35161879d81768[m
+Author: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+Date:   Tue Mar 3 15:46:35 2026 +0530
+
+    Gemma3 NPI File Update (#810)
+    
+    Gemma3 NPI File Update. With new file namely gemma_updated_npi.yaml MMMU
+    metric is met.
+    
+    ---------
+    
+    Signed-off-by: Hem Agnihotri <quic_hemagnih@quicinc.com>
+
+[33mcommit 471de6f58711ac3c598c39da621941c4f1fcd9bf[m
+Author: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+Date:   Mon Mar 2 13:35:39 2026 +0530
+
+    [Proxy]: Adding support for exporting proxy Model (#620)
+    
+    This feature adds support for exporting a proxy model, which disables
+    the Embedding Layer and LM Head of the model.
+    
+    Set `enable_proxy = True` to export the proxy model.
+    Set `write_io = True` to save input/output files during the generation
+    stage.
+    
+    Refer to the example script for implementation details.
+    
+    ## Testing
+    
+    1. Text Models
+    2. Embedding Models
+    3. Vision Models
+    4. Audio Models
+    
+    Note: Check the Example Script for the same.
+    
+    ---------
+    
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+
+[33mcommit 69c83c2dc2c0ec53d9c774faa7ffe3a9b0d9c616[m
+Author: Onkar Chougule <168134249+ochougul@users.noreply.github.com>
+Date:   Fri Feb 27 14:07:58 2026 +0530
+
+    removed duplication of `mdp_json_path` in compilation command (#706) (#779)
+    
+    Needed for passing custom config via vllm.
+    
+    ---------
+    
+    ---------
+    
+    Signed-off-by: Onkar Chougule <ochougul@qti.qualcomm.com>
+    Signed-off-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+    Co-authored-by: Mamta Singh <mamtsing@qti.qualcomm.com>
+
+[33mcommit a6f2dd410faaf8afff89276a5a6d4d359254015e[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Thu Feb 26 11:17:25 2026 +0530
+
+    Fixed Granite_moe and added to CI (#771)
+    
+    Granitemoe export issue fixed and added to CI.
+    
+    ---------
+    
+    Signed-off-by: Ann <akuruvil@qti.qualcomm.com>
+    Co-authored-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
+
+[33mcommit c74b0bdc0164db70695c978f73a4e92bb159bde9[m
+Author: vjanfaza <vjanfaza@qti.qualcomm.com>
+Date:   Wed Feb 25 00:30:29 2026 -0800
+
+    Fixing the issue of CCL support during the decoding phase of Disaggregated Serving (#776)
+    
+    In this PR, we are addressing the compilation error which is happening
+    when we enable CCL during decoding qpc generation of gpt-oss model in
+    Disaggregated Serving. For example, in the following command:
+    python3 -m qaic_disagg \
+         --prefill-port 9802 \
+         --decode-port 9902 \
+         --port 8002 \
+         --decode-device-group 16,17,18,19 \
+         --prefill-device-group 20,21,22,23 \
+         --model openai/gpt-oss-20b \
+         --prefill-max-num-seqs 1 \
+         --decode-max-num-seqs 1 \
+         --prefill-max-seq-len-to-capture 128 \
+         --max-model-len 4096 \
+    --prefill-override-qaic-config "split_retained_state_io:True
+    mxfp6_matmul:True enable_chunking:True" \
+    --decode-override-qaic-config "mxfp6_matmul:True retain_full_kv:True
+    ccl_enabled=True comp_ctx_lengths_decode=1024,2048,4096" \
+         -vvv \
+         --dtype bfloat16 \
+         --kv-cache-dtype mxint8 \
+         --kv-handOff-port 5068 \
+         --tool-call-parser openai \
+         --enable-auto-tool-choice \
+         --enable-log-outputs
+    
+    We are activating CCL during decoding however this causes a compilation
+    error "Error message: No input that uniquely identifies specialization".
+    The source of this error is because of new changes in
+    modeling_gpt_oss.py script which were for the support of disaggregated
+    serving in gpt-oss however it causes error with CCL feature.
+    
+    ---------
+    
+    Signed-off-by: Vahid Janfaza <vjanfaza@qti.qualcomm.com>
+    Co-authored-by: Hem Agnihotri <hemagnih@qti.qualcomm.com>
+
+[33mcommit a8a008d0b5c6e07660f17cfa8e772bfdad8efb10[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Tue Feb 24 14:47:04 2026 +0530
+
+    Fix for CB incosistency for qwen2_5_vl (#765)
+    
+    For Qwen2_5_vl the `decode_inputs["position_ids"][decode_batch_id]` is
+    of size (4,1) and the code was only updating the pos_ids of last index
+    of last array. Therefore, changing it to update the last idx of all
+    arrays of all the batches.
+    
+    ---------
+    
+    Signed-off-by: asmigosw <asmigosw@qti.qualcomm.com>
+
+[33mcommit 4bd22391a0ba80c672ee77acdc5db76f92e62625[m
+Author: vjanfaza <vjanfaza@qti.qualcomm.com>
+Date:   Thu Feb 19 19:53:08 2026 -0800
+
+    Adding the support of dense models distilled from moe models with the same architecture (#728)
+    
+    In this PR, we are adding the support of meta-llama/Llama-Guard-4-12B
+    which is a dense model distilled form llama4 scout moe model. The
+    changes in pytorch_transforms.py file can be applied to any dense model
+    distilled from a moe model with supported architecture in QEfficient.
+    
+    Signed-off-by: Vahid Janfaza <vjanfaza@qti.qualcomm.com>
+
+[33mcommit facae5ff0b5021ba0fd72b2cc8de780f813a0d1c[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Fri Feb 13 13:55:46 2026 +0530
+
+    CI test optimization (#751)
+    
+    Split Run Non-CLI Non-QAIC Tests to LLMs and Features tests, added
+    Duration for checking the top 10 slowest tests in Jenkins, Updated few
+    slowest tests
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+    Co-authored-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+
+[33mcommit 544327a7d307d42eeba03e559982507496ccbac4[m
+Author: Amit Raj <168538872+quic-amitraj@users.noreply.github.com>
+Date:   Fri Feb 13 09:19:07 2026 +0530
+
+    Adding support of QEFFAutoModelForSequenceClassification (#729)
+    
+    Added support of model
+    [Llama-Prompt-Guard-2-22M](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M).
+    PyTorch vs AIC MAD -> 0.0031892061233520508
+    
+    ---------
+    
+    Signed-off-by: Amit Raj <amitraj@qti.qualcomm.com>
+
+[33mcommit fc42332280b880ef41a8dfd52975033a1ff82a37[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Thu Feb 12 14:26:13 2026 +0530
+
+    Added One hot fix for MOE model with subfunction (#777)
+    
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+
+[33mcommit e8e5c4316524be675b989e8d23196cbf4853dd1e[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Mon Feb 9 10:52:11 2026 +0530
+
+    Fix for Diffusers subfunction (#759)
+    
+    - skip subfn handling in export utils for diffusers, we handle this in
+    export() of diffuser models
+    
+    ---------
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+    Co-authored-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+
+[33mcommit 1a3e09c471df16890cbc67bb043496058466d669[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Tue Feb 3 12:02:52 2026 +0530
+
+    Updated compile from qaic-exec to qaic-compile (#703)
+    
+    qaic-exec is going to be deprecated. Updated the code to use new
+    qaic-compile for compile API.
+    
+    ---------
+    
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+
+[33mcommit f64f703aad4145e32433ef9b8dc894f3d2c0e878[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Mon Feb 2 13:27:00 2026 +0530
+
+    Mainline version update (#752)
+    
+    Updated the mainline version to 1.22.0.dev0
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 536e3fc316420ffb01ae697ae0321b0abd100e34[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Sun Feb 1 22:19:08 2026 +0530
+
+    Subfunction Fix (#766)
+    
+    This PR fixes subfunction-based export issues for the following models:
+    
+    1. `bigcode/starcoder`
+    2. `ibm-granite/granite-20b-code-base-8k`
+    3. `ibm-granite/granite-20b-code-instruct-8k`
+    4. `Qwen3-30B-A3B-Instruct-2507`
+    5. `Mixtral-8x7B`
+    
+    In addition, it updates the Causal LM subfunction test file to make it
+    more robust and resilient across models.
+    
+    ---------
+    
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+
+[33mcommit 27ebe8e8ba83970560e80dc480e0266b5fb8e626[m
+Author: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+Date:   Fri Jan 30 10:57:51 2026 +0530
+
+    Adding support for gemma3 in continous batching script for CI (#763)
+    
+    Fix gemma3 to support cb with new SW code
+    
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+
+[33mcommit 3751f7e1b1caf06790e304f5fb1c53a428e897a2[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Thu Jan 29 14:23:30 2026 +0530
+
+    Fix documentation of Multinode FT (#764)
+    
+    Signed-off-by: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+
+[33mcommit 75bf9762db16e41b2d15031aaed373f1203757b5[m
+Author: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+Date:   Wed Jan 28 21:55:12 2026 +0530
+
+    Fixing SW issue in Gemma3 (#740)
+    
+    The SW issue came with prompt + generation length > SW.
+    
+    Fix
+    1. Cache updated with HybridSlidingWindowCache in cache utils
+    
+    ---------
+    
+    Signed-off-by: Dipankar Sarkar <dipankar@qti.qualcomm.com>
+
+[33mcommit b777e8ba70433c75f1c7d537e114c1fd9cdb62d0[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Wed Jan 28 13:35:48 2026 +0530
+
+    Wan support to skip compilation (#734)
+    
+    Support to skip export, compilation if qpc already exists
+     - Updated Flux, wan configs, pipelines with qpc_path changes
+    
+    ---------
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit 5a129c70a3b04c5d5cae4a28731584d7cd9dca2e[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Wed Jan 28 08:49:00 2026 +0530
+
+    Updating pytest config for InternVL (#758)
+    
+    - updated the random sampling gold text, ids for InternVL2_5-1B
+    
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+
+[33mcommit 742b7bd0b41412eb67ce89ce78d46339915ecfea[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Tue Jan 27 12:19:21 2026 +0530
+
+    Updated reduce sum calculation to use einsum for gpt_oss (#754)
+    
+    The decode‑only GPT‑OSS model was failing when executing subfunctions
+    due to somehow considering a dynamic dim value during reduced‑sum
+    calculation. This caused incorrect tensor reduction and resulted in
+    compilation errors.
+    The fix replaces the reduction logic with an einsum-based computation,
+    ensuring stable and deterministic summation regardless of dimension
+    shape.
+    
+    ---------
+    
+    Signed-off-by: asmigosw <asmigosw@qti.qualcomm.com>
+
+[33mcommit eb74758ea49616fafe1c91a3d2aa6d2e19c6684d[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Fri Jan 23 13:13:03 2026 +0530
+
+    Added support of subfunction for VLMs (#699)
+    
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+    Signed-off-by: abhishek-singh591 <sabhis@qti.qualcomm.com>
+    Signed-off-by: Abhishek kumar singh <sabhis@qti.qualcomm.com>
+
+[33mcommit 32f30c075aee0c3f5212e12ac9bec1eb1349928c[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Thu Jan 22 19:44:54 2026 +0530
+
+    Fixed torch patch for subfunction with VLMs (#750)
+    
+    Signed-off-by: abhishek-singh591 <sabhis@qti.qualcomm.com>
+
+[33mcommit 0ffa4ea0b3cfb0c6e4748cac1bf9c62efdfe7ab8[m
+Author: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+Date:   Wed Jan 21 20:19:17 2026 +0530
+
+    Fix for Qwen 2.5 VL with subfunction (#733)
+    
+    Signed-off-by: Abhishek Kumar Singh <sabhis@qti.qualcomm.com>
+
+[33mcommit 3a8e5e9c3ad576074651ecf171243d598200f943[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Wed Jan 21 09:35:36 2026 +0530
+
+    Revert "Qeff versioning" (#746)
+    
+    Reverts quic/efficient-transformers#741
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 47a0fec2f5ba077ce96e413a465cade5423669f8[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Tue Jan 20 20:08:26 2026 +0530
+
+    Qeff versioning (#741)
+    
+    Updated Qeff version to mainline
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit e61a1a3648169bcbd495641ad593aa889c520c0d[m
+Author: Rishin Raj <rishinr@qti.qualcomm.com>
+Date:   Tue Jan 20 19:42:14 2026 +0530
+
+    Removed OpenGVLab/InternVL2_5-1B and OpenGVLab/InternVL3_5-1B (#736)
+    
+    Removed OpenGVLab/InternVL2_5-1B and OpenGVLab/InternVL3_5-1B test due
+    to a compiler issue to unblock the CI
+    
+    ---------
+    
+    Signed-off-by: Rishin Raj <rishinr@qti.qualcomm.com>
+
+[33mcommit 1ec397550ed061f9ce92b44b2a214bd8b87b14a7[m
+Author: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+Date:   Tue Jan 20 15:17:10 2026 +0530
+
+    HOTFIX : Added support for repeat kv heads aligned Bias scaling for AWQ and FP8 models. (#735)
+    
+    Signed-off-by: Dhiraj Kumar Sah <dhirajku@qti.qualcomm.com>
+
+[33mcommit dcbb7beef70d21029bc5a46736c0ee4e96c9aff7[m
+Author: Karthikeya <vtirumal@qti.qualcomm.com>
+Date:   Mon Jan 19 15:08:46 2026 +0530
+
+    Release 1.21 docs (#718)
+    
+    Signed-off-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+    Signed-off-by: vtirumal <vtirumal@qti.qualcomm.com>
+    Signed-off-by: Amit Raj <amitraj@qti.qualcomm.com>
+    Co-authored-by: Abukhoyer Shaik <abukhoye@qti.qualcomm.com>
+    Co-authored-by: Amit Raj <amitraj@qti.qualcomm.com>
+
+[33mcommit 1f2ac51bb8ddb48196c12a09089de10f15da2e28[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Mon Jan 19 14:48:36 2026 +0530
+
+    Added default NPI file (#657)
+    
+    Added default NPI file for Gemma3.
+    
+    1. Eliminates the need to provide NPI file as an extra argument by user.
+    NPI file added as default, no need to provide it explicitly in the
+    example script
+    
+    ---------
+    
+    Signed-off-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
+    Signed-off-by: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+
+[33mcommit 5fdde1917af669e8b6f98ce2d8939a7a7cf0d23f[m
+Author: smedhe <smedhe@qti.qualcomm.com>
+Date:   Fri Jan 16 14:21:37 2026 +0530
+
+    Adding support for multi-node PP+DDP  (#726)
+    
+    In this PR:
+    1) We have modified the code to support PP+DDP on multi-server setup
+    2) Added preprocessing file for grammar dataset
+    3) Modified the naming convention for output dir to include the node
+    rank of the server
+    
+    ---------
+    
+    Signed-off-by: Sharvari Medhe <smedhe@qti.qualcomm.com>
+
+[33mcommit b074af09947a97345a948ecdb45360034895ac47[m
+Author: vjanfaza <vjanfaza@qti.qualcomm.com>
+Date:   Wed Jan 14 22:18:54 2026 -0800
+
+    Fixing the default value of CCL in infer.py (#725)
+    
+    Since CCL is deactivated by default, the value of CCL lists (ccl_prefill
+    and ccl_decode) should be None by default. In infer.py script the value
+    of these lists wasn't None and it caused the problem of ccl activation
+    by default. In this PR we addressed this issue.
+    
+    ---------
+    
+    Signed-off-by: Vahid Janfaza <vjanfaza@qti.qualcomm.com>
+
+[33mcommit 8b00c1b11b9393c67996fbf227e823bd573efd30[m
+Author: smedhe <smedhe@qti.qualcomm.com>
+Date:   Tue Jan 13 22:50:37 2026 +0530
+
+    HOTFIX: changes in alpaca and grammar dataset utils (#724)
+    
+    Handled the edge case where num samples in a dataset are less than 20.
+    Corrected the dataset link in grammar_dataset.py
+    
+    Signed-off-by: Sharvari Medhe <smedhe@qti.qualcomm.com>
+
+[33mcommit 08bce2cc3903fad94cd69ba0004f589eb319f01f[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Tue Jan 13 16:20:10 2026 +0530
+
+    Updated docs (#722)
+    
+    Signed-off-by: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+
+[33mcommit 7a399331538efa42aef104a31167b0a61644f056[m
+Author: asmigosw <asmigosw@qti.qualcomm.com>
+Date:   Tue Jan 13 14:28:44 2026 +0530
+
+    Updating MDP partition config: prioritizing dump over load (#720)
+    
+    QEfficient should ignore providing `-mdp-load-partition-config` when
+    `-mdp-dump-partition-config` is provided in compiler_options of compile
+    API.
+    
+    ---------
+    
+    Signed-off-by: Asmita Goswami <asmigosw@qti.qualcomm.com>
+
+[33mcommit c76d5eaced124c8161b8a5410642f4324ea31b67[m
+Author: smedhe <smedhe@qti.qualcomm.com>
+Date:   Tue Jan 13 13:13:18 2026 +0530
+
+    Adding support for multi-node DDP training (#708)
+    
+    Add support for multi-node Distributed Data Parallel (DDP) training to
+    the QEfficient finetuning pipeline. This enables scaling training across
+    multiple nodes while keeping the existing single-node behavior
+    unchanged.
+    
+    Commands for DDP across 2 servers:
+    For the Master Addr or the Primary Machine, use node-rank as 0:
+    QAIC_VISIBLE_DEVICES=0,1,2,3 torchrun --nnodes=2 --nproc-per-node=4
+    --seed 0 --node-rank=0 --master_addr=<MASTER_NODE_IP> --master_port=8000
+    -m QEfficient.cloud.finetune --device qaic --enable_ddp --model_name
+    "meta-llama/Llama-3.2-1B" --dataset alpaca_dataset --train_batch_size 1
+    --val_batch_size 1 --num_epochs 1 --max_train_step 200 --max_eval_step
+    50
+    
+    For Node 1, use node-rank as 1:
+    QAIC_VISIBLE_DEVICES=0,1,2,3 torchrun --nnodes=2 --nproc-per-node=4
+    --seed 0 --node-rank=1 --master_addr=<MASTER_NODE_IP> --master_port=8000
+    -m QEfficient.cloud.finetune --device qaic --enable_ddp --model_name
+    "meta-llama/Llama-3.2-1B" --dataset alpaca_dataset --train_batch_size 1
+    --val_batch_size 1 --num_epochs 1 --max_train_step 200 --max_eval_step
+    50
+    
+    ---------
+    
+    Signed-off-by: Sharvari Medhe <smedhe@qti.qualcomm.com>
+
+[33mcommit 1ef99356f90931042560e6806c01b7b5dfc38647[m
+Author: Ann Kuruvilla <quic_akuruvil@quicinc.com>
+Date:   Tue Jan 13 11:06:29 2026 +0530
+
+    Updated finetune docs for MULTI NODE Training (#717)
+    
+    Added step wise instructions for MULTI NODE Finetuning.
+    
+    ---------
+    
+    Signed-off-by: Ann Kuruvilla <akuruvil@qti.qualcomm.com>
