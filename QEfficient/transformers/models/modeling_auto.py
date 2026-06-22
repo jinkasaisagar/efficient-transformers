@@ -72,6 +72,7 @@ from QEfficient.transformers.quantizers.quant_transforms import (
     GPTQToMatmulNbitsTransform,
     Mxfp4GptOssExpertDequantizeTransform,
 )
+from QEfficient.transformers.diffusion_gemma_utils import diffusion_gemma_generate_dispatch
 from QEfficient.utils import (
     apply_kv_cache_prefix,
     constants,
@@ -249,6 +250,38 @@ def _filter_custom_io_for_onnx(custom_io: dict, onnx_path: Optional[Union[str, P
         if resolved_name is not None:
             filtered[resolved_name] = dtype
     return filtered
+
+
+def _is_diffusion_gemma_arch(config) -> bool:
+    architectures = getattr(config, "architectures", None) or []
+    return "DiffusionGemmaForBlockDiffusion" in architectures
+
+
+def diffusion_gemma_generate(
+    model,
+    inputs: Optional[torch.Tensor] = None,
+    runtime_ai100: bool = True,
+    device_id: Optional[List[int]] = None,
+    qpc_path: Optional[Union[str, Path]] = None,
+    encoder_qpc_path: Optional[Union[str, Path]] = None,
+    decoder_qpc_path: Optional[Union[str, Path]] = None,
+    **kwargs,
+):
+    breakpoint()
+    qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else qpc_path
+    encoder_qpc_path = Path(encoder_qpc_path) if isinstance(encoder_qpc_path, str) else encoder_qpc_path
+    decoder_qpc_path = Path(decoder_qpc_path) if isinstance(decoder_qpc_path, str) else decoder_qpc_path
+    dispatch = diffusion_gemma_generate_dispatch(
+        model=model,
+        qpc_path=qpc_path,
+        inputs=inputs,
+        runtime_ai100=runtime_ai100,
+        device_id=device_id,
+        encoder_qpc_path=encoder_qpc_path,
+        decoder_qpc_path=decoder_qpc_path,
+        **kwargs,
+    )
+    return dispatch.runtime_result if runtime_ai100 else dispatch.hf_output
 
 
 class QEFFTransformersBase(QEFFBaseModel):
@@ -2147,6 +2180,20 @@ class _QEffAutoModelForImageTextToTextDualQPC:
         if not runtime_ai100:
             raise NotImplementedError("PyTorch execution is not supported yet for this model!")
 
+        if _is_diffusion_gemma_arch(self.model.config):
+            
+            
+            return diffusion_gemma_generate(
+                model=self.model,
+                inputs=inputs,
+                runtime_ai100=runtime_ai100,
+                device_id=device_ids,
+                qpc_path=kwargs.pop("qpc_path", None),
+                encoder_qpc_path=kwargs.pop("encoder_qpc_path", None),
+                decoder_qpc_path=kwargs.pop("decoder_qpc_path", None),
+                **kwargs,
+            )
+
         write_io = kwargs.pop("write_io", False)
         self._write_io_dir = os.path.join(os.path.dirname(self.onnx_path[1]), "io_dir") if write_io else None
 
@@ -2869,12 +2916,13 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
 
     def generate(
         self,
-        inputs: torch.Tensor,
+        inputs: Optional[torch.Tensor] = None,
         streamer: Optional[TextStreamer] = None,
         device_ids: List[int] = None,
         runtime_ai100: bool = True,
         generation_len: Optional[int] = None,
         write_io: bool = False,
+        **kwargs,
     ) -> Union[torch.Tensor, np.ndarray]:
         """
         Generates output by executing the compiled single QPC on Cloud AI 100 Hardware cards.
@@ -2907,6 +2955,22 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
         """
         if not runtime_ai100:
             raise NotImplementedError("PyTorch execution is not supported yet for this model!")
+
+        if _is_diffusion_gemma_arch(self.model.config):
+            qpc_path = kwargs.pop("encoder_qpc_path", None)
+            encoder_qpc_path=kwargs.pop("decoder_qpc_path", None)
+            decoder_qpc_path=kwargs.pop("qpc_path", None)
+
+            return diffusion_gemma_generate(
+                model=self.model,
+                inputs=inputs,
+                runtime_ai100=runtime_ai100,
+                device_id=device_ids,
+                qpc_path=None,
+                encoder_qpc_path=encoder_qpc_path,
+                decoder_qpc_path=decoder_qpc_path,
+                **kwargs,
+            )
 
         self._write_io_dir = os.path.join(os.path.dirname(self.onnx_path), "io_dir") if write_io else None
 
@@ -3258,6 +3322,17 @@ class QEFFAutoModelForImageTextToText:
             If `continuous_batching` is provided as True.
         """
         enable_proxy = kwargs.pop("enable_proxy", False)
+        cfg = kwargs.get("config", None)
+        if cfg is None:
+            from transformers import AutoConfig
+
+            cfg = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=True)
+            kwargs["config"] = cfg
+
+        is_diffusion_gemma = "DiffusionGemmaForBlockDiffusion" in (getattr(cfg, "architectures", None) or [])
+        if is_diffusion_gemma:
+            # DiffusionGemma has no vision branch; force single-wrapper path.
+            kv_offload = False
 
         # TODO: add a check to see if kv_offload is allowed for given model by loading the config and checking architecture or type of config here.
         if continuous_batching and not kv_offload:
@@ -3426,6 +3501,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
         model_class_name = model.__class__.__name__
         if not (model_class_name.endswith("ForCausalLM") or model_class_name.endswith("LMHeadModel")):
             raise TypeError(f"Required pytorch module for CausalLM or LMHeadModel, got {model_class_name}")
+
         _configure_proxy_for_model(self, kwargs.pop("enable_proxy", False))
 
         # TODO: remove from version 1.20
@@ -4581,7 +4657,7 @@ class QEFFAutoModelForCausalLM(QEFFBaseModel):
             
         import time
         start_time = time.perf_counter()
-        result = self._sample(
+        result = _sample(
             start_time,
             qpc_session,
             input_ids,

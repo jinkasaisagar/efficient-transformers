@@ -21,10 +21,15 @@ from transformers.models.gemma3.modeling_gemma3 import (
     Gemma3ForConditionalGeneration,
     Gemma3TextConfig,
     Gemma3TextModel,
-    logger,
     repeat_kv,
     rotate_half,
 )
+try:
+    from transformers.models.gemma3.modeling_gemma3 import logger
+except ImportError:
+    from transformers.utils.logging import get_logger
+
+    logger = get_logger(__name__)
 
 from QEfficient.customop.rms_norm import CustomRMSNorm
 from QEfficient.transformers.cache_utils import QEffSlidingWindowCache

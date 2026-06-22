@@ -1,0 +1,784 @@
+import math
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from time import perf_counter
+from typing import Dict, Optional
+
+import numpy as np
+import torch
+
+from QEfficient.generation.cloud_infer import QAICInferenceSession
+
+
+@dataclass
+class DiffusionGemmaRuntimeResult:
+    generated_ids: np.ndarray
+    tokens_per_forward: np.ndarray
+    decode_forward_passes: np.ndarray
+    total_time: float
+
+
+@dataclass
+class DiffusionGemmaGenerateDispatch:
+    runtime_result: Optional[DiffusionGemmaRuntimeResult]
+    hf_output: Optional[object]
+
+
+@dataclass
+class EntropyBoundSamplerConfig:
+    entropy_bound: float = 0.1
+
+    def __post_init__(self):
+        if not isinstance(self.entropy_bound, (float, int)) or float(self.entropy_bound) <= 0:
+            raise ValueError(f"`entropy_bound` must be a positive float, got {self.entropy_bound}")
+        self.entropy_bound = float(self.entropy_bound)
+
+
+@dataclass
+class DiffusionGemmaGenerationConfig:
+    max_new_tokens: int = 256
+    max_denoising_steps: int = 48
+    sampler_config: EntropyBoundSamplerConfig = field(
+        default_factory=lambda: EntropyBoundSamplerConfig(entropy_bound=0.1)
+    )
+    t_min: float = 0.4
+    t_max: float = 0.8
+    stability_threshold: int = 1
+    confidence_threshold: float = 0.005
+    pad_token_id: Optional[int] = None
+    eos_token_id: Optional[object] = None
+
+    def validate(self):
+        if not isinstance(self.max_new_tokens, int) or self.max_new_tokens <= 0:
+            raise ValueError("`max_new_tokens` must be a positive integer.")
+        if not isinstance(self.max_denoising_steps, int) or self.max_denoising_steps <= 0:
+            raise ValueError("`max_denoising_steps` must be a positive integer.")
+        if self.t_min < 0 or self.t_max < 0 or self.t_max < self.t_min:
+            raise ValueError("Temperature schedule must satisfy: 0 <= t_min <= t_max.")
+        if not isinstance(self.stability_threshold, int) or self.stability_threshold < 0:
+            raise ValueError("`stability_threshold` must be an integer >= 0.")
+        if float(self.confidence_threshold) <= 0:
+            raise ValueError("`confidence_threshold` must be > 0.")
+        if not isinstance(self.sampler_config, EntropyBoundSamplerConfig):
+            raise ValueError("`sampler_config` must be EntropyBoundSamplerConfig.")
+
+
+@dataclass
+class DiffusionGemmaGenerationOutput:
+    sequences: torch.LongTensor
+    tokens_per_forward: Optional[torch.Tensor] = None
+
+
+class LinearTemperatureScheduleLogitsProcessor:
+    def __init__(self, t_min: float, t_max: float, max_denoising_steps: int):
+        self.t_min = float(t_min)
+        self.t_max = float(t_max)
+        self.max_denoising_steps = int(max_denoising_steps)
+
+    def __call__(self, scores: torch.FloatTensor, cur_step: int) -> torch.FloatTensor:
+        temperature = self.t_min + ((self.t_max - self.t_min) * (float(cur_step) / float(self.max_denoising_steps)))
+        return scores / max(temperature, 1e-6)
+
+
+class EntropyBoundSampler:
+    def __init__(self, config: EntropyBoundSamplerConfig, canvas_length: int, vocab_size: int):
+        self.entropy_bound = float(config.entropy_bound)
+        self.canvas_length = int(canvas_length)
+        self.vocab_size = int(vocab_size)
+        self.accepted_token_mask = None
+
+    def initialize_canvas(self, batch_size: int, device: torch.device) -> torch.LongTensor:
+        return torch.randint(
+            low=0,
+            high=self.vocab_size,
+            size=(batch_size, self.canvas_length),
+            dtype=torch.int64,
+            device=device,
+        )
+
+    def accept_canvas(
+        self,
+        current_canvas: torch.LongTensor,
+        denoiser_canvas: torch.LongTensor,
+        logits: torch.FloatTensor,
+    ) -> torch.LongTensor:
+        self.accepted_token_mask = diffusion_gemma_entropy_accept_mask(logits, entropy_bound=self.entropy_bound)
+        return torch.where(self.accepted_token_mask, denoiser_canvas, current_canvas)
+
+    def renoise_canvas(self, accepted_canvas: torch.LongTensor) -> torch.LongTensor:
+        if self.accepted_token_mask is None:
+            return accepted_canvas
+        random_canvas = self.initialize_canvas(accepted_canvas.shape[0], accepted_canvas.device)
+        return torch.where(~self.accepted_token_mask, random_canvas, accepted_canvas)
+
+
+class DiffusionGemmaAdaptiveStopping(ABC):
+    @abstractmethod
+    def __call__(self, argmax_canvas: torch.Tensor, logits: torch.Tensor) -> torch.BoolTensor:
+        pass
+
+    def reset(self):
+        pass
+
+
+class StableAndConfidentStoppingCriteria(DiffusionGemmaAdaptiveStopping):
+    def __init__(self, stability_threshold: int, confidence_threshold: float):
+        self.stability_threshold = max(int(stability_threshold), 0)
+        self.confidence_threshold = float(confidence_threshold)
+        self.argmax_canvas_history: Optional[torch.Tensor] = None
+
+    @torch.no_grad()
+    def reset(self):
+        self.argmax_canvas_history = None
+
+    @torch.no_grad()
+    def __call__(self, argmax_canvas: torch.Tensor, logits: torch.Tensor) -> torch.BoolTensor:
+        batch_size = logits.shape[0]
+        if self.stability_threshold == 0:
+            stable = torch.ones((batch_size,), dtype=torch.bool, device=logits.device)
+        else:
+            if self.argmax_canvas_history is None:
+                self.argmax_canvas_history = torch.full(
+                    (self.stability_threshold, argmax_canvas.shape[0], argmax_canvas.shape[1]),
+                    -1,
+                    dtype=argmax_canvas.dtype,
+                    device=argmax_canvas.device,
+                )
+            stable = (self.argmax_canvas_history == argmax_canvas[None, :, :]).all(dim=-1).all(dim=0)
+            self.argmax_canvas_history = torch.roll(self.argmax_canvas_history, shifts=-1, dims=0)
+            self.argmax_canvas_history[-1] = argmax_canvas
+
+        entropy = torch.distributions.Categorical(logits=logits).entropy().mean(dim=-1)
+        confident = entropy <= self.confidence_threshold
+        return stable & confident
+
+
+# Backward-compatible alias for existing code paths.
+StableAndConfidentStopper = StableAndConfidentStoppingCriteria
+
+
+def _normalize_eos_token_ids(eos_token_id) -> Optional[list[int]]:
+    if eos_token_id is None:
+        return None
+    if isinstance(eos_token_id, (list, tuple)):
+        return [int(x) for x in eos_token_id]
+    return [int(eos_token_id)]
+
+
+def _prepare_runtime_generation_config(
+    model,
+    kwargs: dict,
+) -> DiffusionGemmaGenerationConfig:
+    generation_len = kwargs.pop("generation_len", kwargs.pop("max_new_tokens", 256))
+    max_denoising_steps = kwargs.pop("max_denoising_steps", 48)
+    entropy_bound = kwargs.pop("entropy_bound", 0.1)
+    t_min = kwargs.pop("t_min", 0.4)
+    t_max = kwargs.pop("t_max", 0.8)
+    stability_threshold = kwargs.pop("stability_threshold", 1)
+    confidence_threshold = kwargs.pop("confidence_threshold", 0.005)
+
+    pad_token_id = kwargs.pop("pad_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = getattr(getattr(model, "generation_config", None), "pad_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = getattr(model.config, "pad_token_id", None)
+
+    eos_token_id = kwargs.pop("eos_token_id", None)
+    if eos_token_id is None:
+        eos_token_id = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    if eos_token_id is None:
+        eos_token_id = getattr(model.config, "eos_token_id", None)
+
+    generation_config = DiffusionGemmaGenerationConfig(
+        max_new_tokens=int(generation_len),
+        max_denoising_steps=int(max_denoising_steps),
+        sampler_config=EntropyBoundSamplerConfig(entropy_bound=float(entropy_bound)),
+        t_min=float(t_min),
+        t_max=float(t_max),
+        stability_threshold=int(stability_threshold),
+        confidence_threshold=float(confidence_threshold),
+        pad_token_id=pad_token_id,
+        eos_token_id=eos_token_id,
+    )
+    generation_config.validate()
+    return generation_config
+
+
+def _retained_output_to_state_input(name: str) -> str:
+    if name.endswith("_InternalRetainedState"):
+        return name[: -len("_InternalRetainedState")]
+    if name.endswith("_RetainedState"):
+        return name[: -len("_RetainedState")]
+    return name
+
+
+def _collect_kv_cache_from_outputs(outputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    cache = {}
+    for name, value in outputs.items():
+        if "past_key." in name or "past_value." in name:
+            cache[_retained_output_to_state_input(name)] = value
+    return cache
+
+
+def _build_decoder_kv_inputs(
+    decoder_session: QAICInferenceSession, kv_cache: Dict[str, np.ndarray]
+) -> Dict[str, np.ndarray]:
+    decoder_inputs: Dict[str, np.ndarray] = {}
+    for input_name in getattr(decoder_session, "input_names", []):
+        if "past_key." in input_name or "past_value." in input_name:
+            if input_name in kv_cache:
+                decoder_inputs[input_name] = kv_cache[input_name]
+    return decoder_inputs
+
+
+@torch.no_grad()
+def _run_encoder_block(
+    encoder_session: QAICInferenceSession,
+    input_ids: torch.Tensor,
+) -> Dict[str, np.ndarray]:
+    encoder_outputs = encoder_session.run({"input_ids": input_ids.cpu().numpy().astype(np.int64)})
+    return _collect_kv_cache_from_outputs(encoder_outputs)
+
+
+@torch.no_grad()
+def diffusion_gemma_entropy_accept_mask(logits: torch.Tensor, entropy_bound: float) -> torch.BoolTensor:
+    dist = torch.distributions.Categorical(logits=logits)
+    token_entropy = dist.entropy()
+    sorted_token_entropy, sorted_indices = torch.sort(token_entropy, dim=-1, descending=False)
+    cumulative_entropy = torch.cumsum(sorted_token_entropy, dim=-1)
+    sorted_selection_mask = cumulative_entropy - sorted_token_entropy <= entropy_bound
+    return torch.scatter(
+        input=torch.zeros_like(sorted_selection_mask),
+        dim=-1,
+        index=sorted_indices,
+        src=sorted_selection_mask,
+    )
+
+
+class StableAndConfidentStopper:
+    def __init__(self, stability_threshold: int, confidence_threshold: float):
+        self.stability_threshold = max(int(stability_threshold), 0)
+        self.confidence_threshold = float(confidence_threshold)
+        self.argmax_canvas_history: Optional[torch.Tensor] = None
+
+    @torch.no_grad()
+    def reset(self):
+        self.argmax_canvas_history = None
+
+    @torch.no_grad()
+    def __call__(self, argmax_canvas: torch.Tensor, logits: torch.Tensor) -> torch.BoolTensor:
+        batch_size = logits.shape[0]
+        if self.stability_threshold == 0:
+            stable = torch.ones((batch_size,), dtype=torch.bool, device=logits.device)
+        else:
+            if self.argmax_canvas_history is None:
+                self.argmax_canvas_history = torch.full(
+                    (self.stability_threshold, argmax_canvas.shape[0], argmax_canvas.shape[1]),
+                    -1,
+                    dtype=argmax_canvas.dtype,
+                    device=argmax_canvas.device,
+                )
+            stable = (self.argmax_canvas_history == argmax_canvas[None, :, :]).all(dim=-1).all(dim=0)
+            self.argmax_canvas_history = torch.roll(self.argmax_canvas_history, shifts=-1, dims=0)
+            self.argmax_canvas_history[-1] = argmax_canvas
+
+        entropy = torch.distributions.Categorical(logits=logits).entropy().mean(dim=-1)
+        confident = entropy <= self.confidence_threshold
+        return stable & confident
+
+
+@torch.no_grad()
+def _run_denoising_step(
+    qpc_session,
+    model_config,
+    prefix_ids: np.ndarray,
+    prefix_mask: np.ndarray,
+    current_canvas: torch.Tensor,
+    decoder_attention_mask: np.ndarray,
+    self_conditioning_logits: Optional[torch.Tensor],
+    cur_step: int,
+    max_denoising_steps: int,
+    entropy_bound: float,
+    t_min: float,
+    t_max: float,
+):
+    step_frac = float(cur_step) / float(max_denoising_steps)
+    temperature = float(t_min + ((t_max - t_min) * step_frac))
+    input_names = set(getattr(qpc_session, "input_names", []))
+
+    model_inputs = {
+        "input_ids": prefix_ids,
+        "attention_mask": prefix_mask,
+        "decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64),
+        "decoder_attention_mask": decoder_attention_mask,
+    }
+    if self_conditioning_logits is not None and "self_conditioning_logits" in input_names:
+        model_inputs["self_conditioning_logits"] = self_conditioning_logits.cpu().numpy()
+
+    print(f'In diffusion utils step, {prefix_ids.shape}, mask: {prefix_mask.shape}, decoder_input_ids: {current_canvas.shape}')
+    model_outputs = qpc_session.run(model_inputs)
+    logits = torch.from_numpy(model_outputs["logits"])
+    processed_logits = logits / max(temperature, 1e-6)
+
+    vocab_size = int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+    probs = torch.softmax(processed_logits, dim=-1, dtype=torch.float32)
+    batch_size, canvas_length = current_canvas.shape
+    denoiser_canvas = torch.multinomial(probs.view(-1, vocab_size), num_samples=1)
+    denoiser_canvas = denoiser_canvas.squeeze(-1).view(batch_size, canvas_length)
+    argmax_canvas = torch.argmax(processed_logits, dim=-1).to(torch.int64)
+
+    accepted_mask = diffusion_gemma_entropy_accept_mask(processed_logits, entropy_bound=entropy_bound)
+    accepted_canvas = torch.where(accepted_mask, denoiser_canvas, current_canvas)
+    random_canvas = torch.randint(
+        low=0,
+        high=vocab_size,
+        size=(batch_size, canvas_length),
+        dtype=torch.int64,
+        device=accepted_canvas.device,
+    )
+    next_canvas = torch.where(~accepted_mask, random_canvas, accepted_canvas).to(torch.int64)
+    return next_canvas, argmax_canvas, processed_logits
+
+
+@torch.no_grad()
+def _run_decoder_denoising_loop(
+    decoder_session: QAICInferenceSession,
+    model_config,
+    kv_cache: Dict[str, np.ndarray],
+    current_canvas: torch.Tensor,
+    self_conditioning_logits: Optional[torch.Tensor],
+    max_denoising_steps: int,
+    sampler: EntropyBoundSampler,
+    logits_processor: LinearTemperatureScheduleLogitsProcessor,
+    stopper: Optional[DiffusionGemmaAdaptiveStopping],
+    finished_sequences: torch.Tensor,
+    decoder_forward_passes: torch.Tensor,
+):
+    vocab_size = int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+    input_names = set(getattr(decoder_session, "input_names", []))
+    kv_inputs = _build_decoder_kv_inputs(decoder_session=decoder_session, kv_cache=kv_cache)
+    argmax_canvas = current_canvas.clone()
+    finished_denoising = torch.zeros_like(finished_sequences, dtype=torch.bool)
+    if stopper is not None:
+        stopper.reset()
+
+    for cur_step in reversed(range(1, max_denoising_steps + 1)):
+        decoder_forward_passes += (~(finished_denoising | finished_sequences)).to(torch.int64)
+
+        model_inputs = {
+            "decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64),
+            **kv_inputs,
+        }
+        if self_conditioning_logits is not None and "self_conditioning_logits" in input_names:
+            model_inputs["self_conditioning_logits"] = self_conditioning_logits.cpu().numpy().astype(np.float32)
+
+        model_outputs = decoder_session.run(model_inputs)
+        logits = torch.from_numpy(model_outputs["logits"])
+        processed_logits = logits_processor(scores=logits, cur_step=cur_step)
+        probs = torch.softmax(processed_logits, dim=-1, dtype=torch.float32)
+        batch_size, canvas_length = current_canvas.shape
+        denoiser_canvas = torch.multinomial(probs.view(-1, vocab_size), num_samples=1)
+        denoiser_canvas = denoiser_canvas.squeeze(-1).view(batch_size, canvas_length)
+        new_argmax_canvas = torch.argmax(processed_logits, dim=-1).to(torch.int64)
+        accepted_canvas = sampler.accept_canvas(
+            current_canvas=current_canvas,
+            denoiser_canvas=denoiser_canvas,
+            logits=processed_logits,
+        )
+        next_canvas = sampler.renoise_canvas(accepted_canvas).to(torch.int64)
+
+        if stopper is not None:
+            if finished_denoising.any():
+                new_argmax_canvas = torch.where(finished_denoising[:, None], argmax_canvas, new_argmax_canvas)
+                next_canvas = torch.where(finished_denoising[:, None], current_canvas, next_canvas)
+                if self_conditioning_logits is not None:
+                    processed_logits = torch.where(
+                        finished_denoising[:, None, None],
+                        self_conditioning_logits,
+                        processed_logits,
+                    )
+            finished_denoising |= stopper(new_argmax_canvas, processed_logits)
+
+        current_canvas = next_canvas
+        argmax_canvas = new_argmax_canvas
+        self_conditioning_logits = processed_logits
+        if torch.all(finished_denoising):
+            break
+
+    return argmax_canvas, self_conditioning_logits
+
+
+@torch.no_grad()
+def diffusion_gemma_generate_ai100_split(
+    encoder_session: QAICInferenceSession,
+    decoder_session: QAICInferenceSession,
+    model_config,
+    input_ids: np.ndarray,
+    attention_mask: np.ndarray,
+    max_new_tokens: int,
+    max_denoising_steps: int,
+    entropy_bound: float,
+    t_min: float,
+    t_max: float,
+    stability_threshold: int,
+    confidence_threshold: float,
+    pad_token_id: Optional[int],
+    eos_token_id,
+    initial_decoder_input_ids: Optional[np.ndarray] = None,
+    initial_self_conditioning_logits: Optional[np.ndarray] = None,
+) -> DiffusionGemmaRuntimeResult:
+    start_time = perf_counter()
+    batch_size = input_ids.shape[0]
+    canvas_length = int(getattr(model_config, "canvas_length", 256))
+    print('In diffusion utils ', max_new_tokens, max_new_tokens)
+    max_new_canvases = int(math.ceil(max_new_tokens / canvas_length))
+    eos_ids = _normalize_eos_token_ids(eos_token_id)
+
+    input_ids_t = torch.from_numpy(input_ids).to(torch.int64)
+    attention_mask_t = torch.from_numpy(attention_mask).to(torch.int64)
+    finished_sequences = torch.zeros((batch_size,), dtype=torch.bool)
+    decoder_forward_passes = torch.zeros((batch_size,), dtype=torch.int64)
+
+    stopper: Optional[DiffusionGemmaAdaptiveStopping] = None
+    if stability_threshold is not None and confidence_threshold is not None:
+        stopper = StableAndConfidentStoppingCriteria(
+            stability_threshold=stability_threshold,
+            confidence_threshold=confidence_threshold,
+        )
+
+    print(f'Encoder block is Started, input ids is {input_ids_t.shape}')
+    # Initial prefix encode: output is KV cache consumed by decoder denoising loop.
+    kv_cache = _run_encoder_block(encoder_session=encoder_session, input_ids=input_ids_t)
+    print(f'Encoder block is finished kv_cache is {max_new_tokens} and input ids is {input_ids_t.shape}')
+    for block_idx in range(max_new_canvases):
+        if torch.all(finished_sequences):
+            break
+
+        vocab_size = int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+        if initial_decoder_input_ids is not None and block_idx == 0:
+            current_canvas = torch.from_numpy(initial_decoder_input_ids).to(torch.int64)
+        else:
+            current_canvas = torch.randint(0, vocab_size, size=(batch_size, canvas_length), dtype=torch.int64)
+
+        if initial_self_conditioning_logits is not None and block_idx == 0:
+            self_conditioning_logits = torch.from_numpy(initial_self_conditioning_logits)
+        else:
+            self_conditioning_logits = None
+
+        sampler = EntropyBoundSampler(
+            config=EntropyBoundSamplerConfig(entropy_bound=entropy_bound),
+            canvas_length=canvas_length,
+            vocab_size=vocab_size,
+        )
+        logits_processor = LinearTemperatureScheduleLogitsProcessor(
+            t_min=t_min,
+            t_max=t_max,
+            max_denoising_steps=max_denoising_steps,
+        )
+
+        denoised_canvas, _ = _run_decoder_denoising_loop(
+            decoder_session=decoder_session,
+            model_config=model_config,
+            kv_cache=kv_cache,
+            current_canvas=current_canvas,
+            self_conditioning_logits=self_conditioning_logits,
+            max_denoising_steps=max_denoising_steps,
+            sampler=sampler,
+            logits_processor=logits_processor,
+            stopper=stopper,
+            finished_sequences=finished_sequences,
+            decoder_forward_passes=decoder_forward_passes,
+        )
+
+        input_ids_t = torch.cat([input_ids_t, denoised_canvas], dim=-1)
+        if finished_sequences.any() and pad_token_id is not None:
+            input_ids_t[finished_sequences, -canvas_length:] = int(pad_token_id)
+
+        if eos_ids is not None:
+            new_tokens = input_ids_t[:, -canvas_length:]
+            eos_tensor = torch.tensor(eos_ids, dtype=new_tokens.dtype, device=new_tokens.device)
+            is_eos = torch.isin(new_tokens, eos_tensor)
+            finished_this_canvas = is_eos.any(dim=-1)
+            just_finished = (~finished_sequences) & finished_this_canvas
+            if torch.any(just_finished) and pad_token_id is not None:
+                eos_cumsum = torch.cumsum(is_eos.to(torch.int64), dim=-1)
+                pad_mask = (eos_cumsum > 0) & ~((eos_cumsum == 1) & is_eos)
+                new_tokens[just_finished] = torch.where(
+                    pad_mask[just_finished],
+                    torch.full_like(new_tokens[just_finished], int(pad_token_id)),
+                    new_tokens[just_finished],
+                )
+                input_ids_t[:, -canvas_length:] = new_tokens
+            finished_sequences |= finished_this_canvas
+
+        attention_mask_t = torch.cat(
+            [attention_mask_t, torch.ones((batch_size, canvas_length), dtype=attention_mask_t.dtype)],
+            dim=-1,
+        )
+
+        # Re-encode full denoised prefix for next block as requested by split runtime flow.
+        if block_idx < (max_new_canvases - 1) and not torch.all(finished_sequences):
+            kv_cache = _run_encoder_block(encoder_session=encoder_session, input_ids=input_ids_t)
+
+    new_tokens = input_ids_t[:, input_ids.shape[1] : input_ids.shape[1] + max_new_tokens]
+    if pad_token_id is not None:
+        num_valid_tokens = (new_tokens != int(pad_token_id)).sum(dim=-1).to(torch.float32)
+    else:
+        num_valid_tokens = torch.full((batch_size,), float(new_tokens.shape[1]), dtype=torch.float32)
+
+    denom = torch.clamp(decoder_forward_passes.to(torch.float32), min=1.0)
+    tokens_per_forward = (num_valid_tokens / denom).cpu().numpy()
+    total_time = max(float(perf_counter() - start_time), 1e-6)
+    return DiffusionGemmaRuntimeResult(
+        generated_ids=new_tokens.cpu().numpy().astype(np.int64),
+        tokens_per_forward=tokens_per_forward,
+        decode_forward_passes=decoder_forward_passes.cpu().numpy().astype(np.int64),
+        total_time=total_time,
+    )
+
+
+@torch.no_grad()
+def diffusion_gemma_generate_ai100(
+    qpc_session,
+    model_config,
+    input_ids: np.ndarray,
+    attention_mask: np.ndarray,
+    max_new_tokens: int,
+    max_denoising_steps: int,
+    entropy_bound: float,
+    t_min: float,
+    t_max: float,
+    stability_threshold: int,
+    confidence_threshold: float,
+    pad_token_id: Optional[int],
+    eos_token_id,
+    initial_decoder_input_ids: Optional[np.ndarray] = None,
+    initial_self_conditioning_logits: Optional[np.ndarray] = None,
+) -> DiffusionGemmaRuntimeResult:
+    start_time = perf_counter()
+    batch_size = input_ids.shape[0]
+    canvas_length = int(getattr(model_config, "canvas_length", 256))
+    max_new_canvases = int(math.ceil(max_new_tokens / canvas_length))
+
+    eos_ids = _normalize_eos_token_ids(eos_token_id)
+    input_ids_t = torch.from_numpy(input_ids).to(torch.int64)
+    attention_mask_t = torch.from_numpy(attention_mask).to(torch.int64)
+    finished_sequences = torch.zeros((batch_size,), dtype=torch.bool)
+    decoder_forward_passes = torch.zeros((batch_size,), dtype=torch.int64)
+
+    stopper = None
+    if stability_threshold is not None and confidence_threshold is not None:
+        stopper = StableAndConfidentStopper(stability_threshold=stability_threshold, confidence_threshold=confidence_threshold)
+
+    for _ in range(max_new_canvases):
+        if torch.all(finished_sequences):
+            break
+        
+        print(model_config)
+        vocab_size = model_config.text_config.vocab_size #int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+        if initial_decoder_input_ids is not None:
+            current_canvas = torch.from_numpy(initial_decoder_input_ids).to(torch.int64)
+            initial_decoder_input_ids = None
+        else:
+            current_canvas = torch.randint(0, vocab_size, size=(batch_size, canvas_length), dtype=torch.int64)
+        argmax_canvas = current_canvas.clone()
+        if initial_self_conditioning_logits is not None:
+            self_conditioning_logits = torch.from_numpy(initial_self_conditioning_logits)
+            initial_self_conditioning_logits = None
+        else:
+            self_conditioning_logits = None
+        finished_denoising = torch.zeros((batch_size,), dtype=torch.bool)
+        if stopper is not None:
+            stopper.reset()
+
+        decoder_attention_mask = torch.ones((batch_size, input_ids_t.shape[1] + canvas_length), dtype=torch.int64).numpy()
+        decoder_attention_mask[:, : attention_mask_t.shape[1]] = attention_mask_t.numpy()
+        prefix_ids_np = input_ids_t.numpy().astype(np.int64)
+        prefix_mask_np = attention_mask_t.numpy().astype(np.int64)
+
+        for cur_step in reversed(range(1, max_denoising_steps + 1)):
+            decoder_forward_passes += (~(finished_denoising | finished_sequences)).to(torch.int64)
+            next_canvas, new_argmax_canvas, processed_logits = _run_denoising_step(
+                qpc_session=qpc_session,
+                model_config=model_config,
+                prefix_ids=prefix_ids_np,
+                prefix_mask=prefix_mask_np,
+                current_canvas=current_canvas,
+                decoder_attention_mask=decoder_attention_mask,
+                self_conditioning_logits=self_conditioning_logits,
+                cur_step=cur_step,
+                max_denoising_steps=max_denoising_steps,
+                entropy_bound=entropy_bound,
+                t_min=t_min,
+                t_max=t_max,
+            )
+
+            if stopper is not None:
+                if finished_denoising.any():
+                    new_argmax_canvas = torch.where(finished_denoising[:, None], argmax_canvas, new_argmax_canvas)
+                    next_canvas = torch.where(finished_denoising[:, None], current_canvas, next_canvas)
+                    if self_conditioning_logits is not None:
+                        processed_logits = torch.where(
+                            finished_denoising[:, None, None],
+                            self_conditioning_logits,
+                            processed_logits,
+                        )
+                finished_denoising |= stopper(new_argmax_canvas, processed_logits)
+
+            current_canvas = next_canvas
+            argmax_canvas = new_argmax_canvas
+            self_conditioning_logits = processed_logits
+
+            if torch.all(finished_denoising):
+                break
+
+        input_ids_t = torch.cat([input_ids_t, argmax_canvas], dim=-1)
+
+        if finished_sequences.any() and pad_token_id is not None:
+            input_ids_t[finished_sequences, -canvas_length:] = int(pad_token_id)
+
+        if eos_ids is not None:
+            new_tokens = input_ids_t[:, -canvas_length:]
+            eos_tensor = torch.tensor(eos_ids, dtype=new_tokens.dtype, device=new_tokens.device)
+            is_eos = torch.isin(new_tokens, eos_tensor)
+            finished_this_canvas = is_eos.any(dim=-1)
+            just_finished = (~finished_sequences) & finished_this_canvas
+            if torch.any(just_finished) and pad_token_id is not None:
+                eos_cumsum = torch.cumsum(is_eos.to(torch.int64), dim=-1)
+                pad_mask = (eos_cumsum > 0) & ~((eos_cumsum == 1) & is_eos)
+                new_tokens[just_finished] = torch.where(
+                    pad_mask[just_finished],
+                    torch.full_like(new_tokens[just_finished], int(pad_token_id)),
+                    new_tokens[just_finished],
+                )
+                input_ids_t[:, -canvas_length:] = new_tokens
+            finished_sequences |= finished_this_canvas
+
+        attention_mask_t = torch.cat(
+            [attention_mask_t, torch.ones((batch_size, canvas_length), dtype=attention_mask_t.dtype)],
+            dim=-1,
+        )
+
+    new_tokens = input_ids_t[:, input_ids.shape[1] : input_ids.shape[1] + max_new_tokens]
+    if pad_token_id is not None:
+        num_valid_tokens = (new_tokens != int(pad_token_id)).sum(dim=-1).to(torch.float32)
+    else:
+        num_valid_tokens = torch.full((batch_size,), float(new_tokens.shape[1]), dtype=torch.float32)
+
+    denom = torch.clamp(decoder_forward_passes.to(torch.float32), min=1.0)
+    tokens_per_forward = (num_valid_tokens / denom).cpu().numpy()
+    total_time = max(float(perf_counter() - start_time), 1e-6)
+    return DiffusionGemmaRuntimeResult(
+        generated_ids=new_tokens.cpu().numpy().astype(np.int64),
+        tokens_per_forward=tokens_per_forward,
+        decode_forward_passes=decoder_forward_passes.cpu().numpy().astype(np.int64),
+        total_time=total_time,
+    )
+
+
+def diffusion_gemma_generate_dispatch(
+    model,
+    qpc_path,
+    inputs,
+    runtime_ai100: bool,
+    device_id,
+    **kwargs,
+) -> DiffusionGemmaGenerateDispatch:
+    encoder_qpc_path = kwargs.pop("encoder_qpc_path", None)
+    decoder_qpc_path = kwargs.pop("decoder_qpc_path", None)
+    generation_config = _prepare_runtime_generation_config(model=model, kwargs=kwargs)
+    decoder_input_ids = kwargs.pop("decoder_input_ids", None)
+    self_conditioning_logits = kwargs.pop("self_conditioning_logits", None)
+
+    if not runtime_ai100:
+        hf_kwargs = {
+            "max_new_tokens": generation_config.max_new_tokens,
+            "max_denoising_steps": generation_config.max_denoising_steps,
+            "t_min": generation_config.t_min,
+            "t_max": generation_config.t_max,
+            **kwargs,
+        }
+        model_device = next(model.parameters()).device
+        if inputs is None:
+            raise ValueError("`inputs` is required. Pass pre-tokenized inputs from processor.apply_chat_template(...).")
+        hf_inputs = {k: v for k, v in inputs.items()}
+        hf_inputs = {k: (v.to(model_device) if isinstance(v, torch.Tensor) else v) for k, v in hf_inputs.items()}
+        return DiffusionGemmaGenerateDispatch(runtime_result=None, hf_output=model.generate(**hf_inputs, **hf_kwargs))
+
+    if encoder_qpc_path is not None and decoder_qpc_path is not None:
+        if not isinstance(encoder_qpc_path, Path):
+            encoder_qpc_path = Path(encoder_qpc_path)
+        if not isinstance(decoder_qpc_path, Path):
+            decoder_qpc_path = Path(decoder_qpc_path)
+        if not encoder_qpc_path.exists() or not decoder_qpc_path.exists():
+            raise TypeError("Please run compile API first for both encoder and decoder QPCs.")
+    # elif not isinstance(qpc_path, Path):
+    #     raise TypeError("Please run compile API first!")
+
+    if inputs is None:
+        raise ValueError("`inputs` is required. Pass pre-tokenized inputs from processor.apply_chat_template(...).")
+    input_ids_tensor = inputs.get("input_ids", None)
+    if input_ids_tensor is None:
+        raise ValueError("`inputs` must contain `input_ids` for DiffusionGemma generate.")
+    if isinstance(input_ids_tensor, np.ndarray):
+        input_ids = input_ids_tensor.astype(np.int64)
+    else:
+        input_ids = input_ids_tensor.cpu().numpy().astype(np.int64)
+
+    attention_mask_tensor = inputs.get("attention_mask", None)
+    if attention_mask_tensor is None:
+        attention_mask = np.ones_like(input_ids, dtype=np.int64)
+    elif isinstance(attention_mask_tensor, np.ndarray):
+        attention_mask = attention_mask_tensor.astype(np.int64)
+    else:
+        attention_mask = attention_mask_tensor.cpu().numpy().astype(np.int64)
+
+    if isinstance(decoder_input_ids, torch.Tensor):
+        decoder_input_ids = decoder_input_ids.cpu().numpy().astype(np.int64)
+    if isinstance(self_conditioning_logits, torch.Tensor):
+        self_conditioning_logits = self_conditioning_logits.cpu().numpy().astype(np.float32)
+
+    print('In utils ',encoder_qpc_path)
+    print('In utils ',decoder_qpc_path)
+    if encoder_qpc_path is not None and decoder_qpc_path is not None:
+        encoder_session = QAICInferenceSession(str(encoder_qpc_path), device_id or [None])
+        decoder_session = QAICInferenceSession(str(decoder_qpc_path), device_id or [None])
+        runtime_result = diffusion_gemma_generate_ai100_split(
+            encoder_session=encoder_session,
+            decoder_session=decoder_session,
+            model_config=model.config,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=generation_config.max_new_tokens,
+            max_denoising_steps=generation_config.max_denoising_steps,
+            entropy_bound=generation_config.sampler_config.entropy_bound,
+            t_min=generation_config.t_min,
+            t_max=generation_config.t_max,
+            stability_threshold=generation_config.stability_threshold,
+            confidence_threshold=generation_config.confidence_threshold,
+            pad_token_id=generation_config.pad_token_id,
+            eos_token_id=generation_config.eos_token_id,
+            initial_decoder_input_ids=decoder_input_ids,
+            initial_self_conditioning_logits=self_conditioning_logits,
+        )
+    else:
+        qpc_session = QAICInferenceSession(str(qpc_path), device_id or [0])
+        runtime_result = diffusion_gemma_generate_ai100(
+            qpc_session=qpc_session,
+            model_config=model.config,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=generation_config.max_new_tokens,
+            max_denoising_steps=generation_config.max_denoising_steps,
+            entropy_bound=generation_config.sampler_config.entropy_bound,
+            t_min=generation_config.t_min,
+            t_max=generation_config.t_max,
+            stability_threshold=generation_config.stability_threshold,
+            confidence_threshold=generation_config.confidence_threshold,
+            pad_token_id=generation_config.pad_token_id,
+            eos_token_id=generation_config.eos_token_id,
+            initial_decoder_input_ids=decoder_input_ids,
+            initial_self_conditioning_logits=self_conditioning_logits,
+        )
+    return DiffusionGemmaGenerateDispatch(runtime_result=runtime_result, hf_output=None)

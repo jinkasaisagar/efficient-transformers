@@ -58,6 +58,25 @@ from transformers.models.gemma4.modeling_gemma4 import (
     Gemma4TextModel,
     Gemma4TextRouter,
 )
+try:
+    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
+        DiffusionGemmaDecoderModel,
+        DiffusionGemmaDecoderTextAttention,
+        DiffusionGemmaDecoderTextLayer,
+        DiffusionGemmaEncoderModel,
+        DiffusionGemmaEncoderTextAttention,
+        DiffusionGemmaEncoderTextLayer,
+        DiffusionGemmaEncoderTextModel,
+        DiffusionGemmaForBlockDiffusion,
+        DiffusionGemmaModel,
+        DiffusionGemmaRMSNorm,
+        DiffusionGemmaTextExperts,
+        DiffusionGemmaTextRouter,
+    )
+
+    _DIFFUSION_GEMMA_AVAILABLE = True
+except Exception:
+    _DIFFUSION_GEMMA_AVAILABLE = False
 from transformers.models.glm4_moe.modeling_glm4_moe import (
     Glm4MoeAttention,
     Glm4MoeDecoderLayer,
@@ -363,6 +382,21 @@ from QEfficient.transformers.models.gemma4.modeling_gemma4 import (
     QEffGemma4TextRouter,
     QEffPrefillChunckedGemma4TextExperts,
 )
+if _DIFFUSION_GEMMA_AVAILABLE:
+    from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
+        QEffDiffusionGemmaCustomRMSNormAIC,
+        QEffDiffusionGemmaDecoderModel,
+        QEffDiffusionGemmaDecoderTextAttention,
+        QEffDiffusionGemmaDecoderTextLayer,
+        QEffDiffusionGemmaEncoderModel,
+        QEffDiffusionGemmaEncoderTextAttention,
+        QEffDiffusionGemmaEncoderTextLayer,
+        QEffDiffusionGemmaEncoderTextModel,
+        QEffDiffusionGemmaForBlockDiffusion,
+        QEffDiffusionGemmaModel,
+        QEffDiffusionGemmaTextExperts,
+        QEffDiffusionGemmaTextRouter,
+    )
 from QEfficient.transformers.models.glm4_moe.modeling_glm4_moe import (
     QEffGlm4MoeAttention,
     QEffGlm4MoeDecoderLayer,
@@ -638,6 +672,7 @@ from QEfficient.transformers.models.llada.modeling_llada import (
     QEffLLaDAModel,
     QEffLLaDAModelLM,
 )
+
 from QEfficient.transformers.post_processing import build_and_attach_mlp, model_type_registry
 from QEfficient.transformers.sampler.sampler import sampler_forward
 from QEfficient.transformers.spd.spd_transform_forward import tlm_forward
@@ -683,6 +718,10 @@ class CustomOpsTransform(ModuleMappingTransform):
         Qwen3_5RMSNormGated: QEffQwen3_5GatedDeltaNetCustomRMSNormAIC,
         Qwen3_5MoeRMSNormGated: QEffQwen3_5MoeGatedDeltaNetCustomRMSNormAIC,
     }
+
+
+if _DIFFUSION_GEMMA_AVAILABLE:
+    CustomOpsTransform._module_mapping[DiffusionGemmaRMSNorm] = QEffDiffusionGemmaCustomRMSNormAIC
 
 
 class KVCacheTransform(ModuleMappingTransform):
@@ -920,6 +959,24 @@ class KVCacheTransform(ModuleMappingTransform):
     def apply(cls, model: nn.Module) -> Tuple[nn.Module, bool]:
         model, transformed = super().apply(model)
         return model, transformed
+
+
+if _DIFFUSION_GEMMA_AVAILABLE:
+    KVCacheTransform._module_mapping.update(
+        {
+            DiffusionGemmaForBlockDiffusion: QEffDiffusionGemmaForBlockDiffusion,
+            DiffusionGemmaModel: QEffDiffusionGemmaModel,
+            DiffusionGemmaEncoderModel: QEffDiffusionGemmaEncoderModel,
+            DiffusionGemmaEncoderTextModel: QEffDiffusionGemmaEncoderTextModel,
+            DiffusionGemmaDecoderModel: QEffDiffusionGemmaDecoderModel,
+            DiffusionGemmaEncoderTextAttention: QEffDiffusionGemmaEncoderTextAttention,
+            DiffusionGemmaDecoderTextAttention: QEffDiffusionGemmaDecoderTextAttention,
+            DiffusionGemmaEncoderTextLayer: QEffDiffusionGemmaEncoderTextLayer,
+            DiffusionGemmaDecoderTextLayer: QEffDiffusionGemmaDecoderTextLayer,
+            DiffusionGemmaTextExperts: QEffDiffusionGemmaTextExperts,
+            DiffusionGemmaTextRouter: QEffDiffusionGemmaTextRouter,
+        }
+    )
 
 
 class PrefillOnlyTransform(ModuleMappingTransform):
@@ -1199,6 +1256,7 @@ class KVCacheExternalModuleMapperTransform(ExternalModuleMapperTransform):
             "forward":QEffLLaDAModel.forward,
             "__qeff_init__":QEffLLaDAModel.__qeff_init__
         },
+        
         # Mapping for Molmo
         "MolmoForCausalLM": {
             "forward": QEffMolmoModel.forward,
