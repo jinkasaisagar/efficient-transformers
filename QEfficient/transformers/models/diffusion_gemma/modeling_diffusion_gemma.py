@@ -864,17 +864,20 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         batch_size: int,
         prefill_seq_len: int,
         ctx_len: int,
+        img_size: Optional[int] = None,
         comp_ctx_lengths_prefill: Optional[List[int]] = None,
         comp_ctx_lengths_decode: Optional[List[int]] = None,
+        kv_offload: bool = False,
         continuous_batching: bool = False,
         kv_cache_batch_size: Optional[int] = None,
         full_batch_size: Optional[int] = None,
-        **kwargs,
+        **compiler_options,
     ):
-        del kwargs
+        del img_size, kv_offload
         batch_size = batch_size if batch_size else 1
         prefill_seq_len = prefill_seq_len if prefill_seq_len else 32
         ctx_len = ctx_len if ctx_len else constants.INTERN_CTX_LEN
+        canvas_len = int(getattr(self.config, "canvas_length", 256))
         kv_cache_batch_size = kv_cache_batch_size or full_batch_size or batch_size
         sliding_window = self.config.text_config.sliding_window
 
@@ -883,6 +886,7 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
                 "batch_size": 1 if continuous_batching else batch_size,
                 "seq_len": prefill_seq_len,
                 "ctx_len": ctx_len,
+                "canvas_len": canvas_len,
                 "sliding_window": sliding_window,
             }
             if comp_ctx_lengths is not None:
@@ -898,8 +902,9 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         def build_decode_spec(comp_ctx_lengths: Optional[int] = None):
             spec = {
                 "batch_size": full_batch_size if continuous_batching else batch_size,
-                "seq_len": "1",
+                "seq_len": canvas_len,
                 "ctx_len": ctx_len,
+                "canvas_len": canvas_len,
                 "sliding_window": sliding_window,
             }
             if comp_ctx_lengths is not None:
@@ -913,9 +918,9 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         if comp_ctx_lengths_prefill and comp_ctx_lengths_decode:
             specializations = [build_prefill_spec(length) for length in comp_ctx_lengths_prefill]
             specializations.extend(build_decode_spec(length) for length in comp_ctx_lengths_decode)
-            return specializations
+            return specializations, compiler_options
 
-        return [build_prefill_spec(), build_decode_spec()]
+        return [build_prefill_spec(), build_decode_spec()], compiler_options
 
     def get_output_names(self, kv_offload: bool = False):
         del kv_offload
@@ -981,9 +986,9 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         dynamic_axes = {
             "input_ids": {0: "batch_size", 1: "seq_len"},
             "attention_mask": {0: "batch_size", 1: "seq_len"},
-            "decoder_input_ids": {0: "batch_size", 1: "seq_len"},
+            "decoder_input_ids": {0: "batch_size", 1: "canvas_len"},
             "position_ids": {0: "batch_size", 1: "seq_len"},
-            "self_conditioning_logits": {0: "batch_size", 1: "seq_len"},
+            "self_conditioning_logits": {0: "batch_size", 1: "canvas_len"},
             "self_conditioning_mask": {0: "batch_size"},
         }
         if continuous_batching:
@@ -1063,7 +1068,7 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
             hidden_states=model_outputs.hidden_states,
             attentions=model_outputs.attentions,
             past_key_values=next_cache,
-            encoder_last_hidden_state=model_outputs.encoder_last_hidden_state,
+            # encoder_last_hidden_state=model_outputs.encoder_last_hidden_state,
         )
 
 

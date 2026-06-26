@@ -267,7 +267,6 @@ def diffusion_gemma_generate(
     decoder_qpc_path: Optional[Union[str, Path]] = None,
     **kwargs,
 ):
-    breakpoint()
     qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else qpc_path
     encoder_qpc_path = Path(encoder_qpc_path) if isinstance(encoder_qpc_path, str) else encoder_qpc_path
     decoder_qpc_path = Path(decoder_qpc_path) if isinstance(decoder_qpc_path, str) else decoder_qpc_path
@@ -2957,16 +2956,16 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
             raise NotImplementedError("PyTorch execution is not supported yet for this model!")
 
         if _is_diffusion_gemma_arch(self.model.config):
-            qpc_path = kwargs.pop("encoder_qpc_path", None)
-            encoder_qpc_path=kwargs.pop("decoder_qpc_path", None)
-            decoder_qpc_path=kwargs.pop("qpc_path", None)
+            qpc_path = kwargs.pop("qpc_path", None)
+            encoder_qpc_path = kwargs.pop("encoder_qpc_path", None)
+            decoder_qpc_path = kwargs.pop("decoder_qpc_path", None)
 
             return diffusion_gemma_generate(
                 model=self.model,
                 inputs=inputs,
                 runtime_ai100=runtime_ai100,
                 device_id=device_ids,
-                qpc_path=None,
+                qpc_path=qpc_path,
                 encoder_qpc_path=encoder_qpc_path,
                 decoder_qpc_path=decoder_qpc_path,
                 **kwargs,
@@ -3331,7 +3330,6 @@ class QEFFAutoModelForImageTextToText:
 
         is_diffusion_gemma = "DiffusionGemmaForBlockDiffusion" in (getattr(cfg, "architectures", None) or [])
         if is_diffusion_gemma:
-            # DiffusionGemma has no vision branch; force single-wrapper path.
             kv_offload = False
 
         # TODO: add a check to see if kv_offload is allowed for given model by loading the config and checking architecture or type of config here.

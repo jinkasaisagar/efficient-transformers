@@ -221,14 +221,122 @@ def _collect_kv_cache_from_outputs(outputs: Dict[str, np.ndarray]) -> Dict[str, 
     return cache
 
 
+def _find_matching_kv_tensor(input_name: str, kv_cache: Dict[str, np.ndarray]) -> Optional[np.ndarray]:
+    if input_name in kv_cache:
+        return kv_cache[input_name]
+
+    basename = input_name.rsplit("/", 1)[-1]
+    if basename in kv_cache:
+        return kv_cache[basename]
+
+    candidates = [input_name, basename]
+    for name in list(candidates):
+        if name.endswith("_InternalRetainedState"):
+            base = name[: -len("_InternalRetainedState")]
+            candidates.extend([base, f"{base}_RetainedState"])
+        elif name.endswith("_RetainedState"):
+            base = name[: -len("_RetainedState")]
+            candidates.extend([base, f"{base}_InternalRetainedState"])
+
+    for candidate in candidates:
+        if candidate in kv_cache:
+            return kv_cache[candidate]
+    return None
+
+
+def _align_to_binding_shape(
+    array: np.ndarray,
+    expected_shape: tuple[int, ...],
+    expected_dtype: np.dtype,
+) -> np.ndarray:
+    arr = np.asarray(array)
+    if arr.dtype != expected_dtype:
+        arr = arr.astype(expected_dtype, copy=False)
+
+    if tuple(arr.shape) == tuple(expected_shape):
+        return arr
+
+    if arr.ndim != len(expected_shape):
+        raise ValueError(
+            f"KV rank mismatch: got {arr.shape}, expected rank {len(expected_shape)} for shape {expected_shape}."
+        )
+
+    aligned = np.zeros(expected_shape, dtype=expected_dtype)
+    slices = tuple(slice(0, min(int(a), int(b))) for a, b in zip(arr.shape, expected_shape))
+    aligned[slices] = arr[slices]
+    return aligned
+
+
+def _get_allowed_seq_lens_for_input(qpc_session: QAICInferenceSession, input_name: str) -> list[int]:
+    if not hasattr(qpc_session, "binding_index_map") or input_name not in qpc_session.binding_index_map:
+        return []
+    if not hasattr(qpc_session, "allowed_shapes"):
+        return []
+
+    binding_index = qpc_session.binding_index_map[input_name]
+    seq_lens = []
+    for allowed in getattr(qpc_session, "allowed_shapes", []):
+        try:
+            dims = allowed[binding_index][1]
+            if len(dims) >= 2:
+                seq_lens.append(int(dims[1]))
+        except Exception:
+            continue
+    return sorted(set(seq_lens))
+
+
+def _pick_target_seq_len(seq_lens: list[int], current_len: int) -> int:
+    if not seq_lens:
+        return int(current_len)
+    for seq_len in seq_lens:
+        if current_len <= seq_len:
+            return int(seq_len)
+    return int(max(seq_lens))
+
+
+def _pad_or_truncate_prefix(
+    ids: np.ndarray, mask: np.ndarray, target_seq_len: int
+) -> tuple[np.ndarray, np.ndarray]:
+    ids = np.asarray(ids, dtype=np.int64)
+    mask = np.asarray(mask, dtype=np.int64)
+    if ids.ndim != 2 or mask.ndim != 2:
+        raise ValueError(f"Expected 2D prefix ids/mask, got ids={ids.shape}, mask={mask.shape}")
+    if ids.shape != mask.shape:
+        raise ValueError(f"Prefix ids/mask shape mismatch: ids={ids.shape}, mask={mask.shape}")
+
+    cur_len = ids.shape[1]
+    if cur_len == target_seq_len:
+        return ids, mask
+    if cur_len > target_seq_len:
+        return ids[:, -target_seq_len:], mask[:, -target_seq_len:]
+
+    pad_len = target_seq_len - cur_len
+    ids_pad = np.zeros((ids.shape[0], pad_len), dtype=np.int64)
+    mask_pad = np.zeros((mask.shape[0], pad_len), dtype=np.int64)
+    return np.concatenate([ids, ids_pad], axis=1), np.concatenate([mask, mask_pad], axis=1)
+
+
 def _build_decoder_kv_inputs(
     decoder_session: QAICInferenceSession, kv_cache: Dict[str, np.ndarray]
 ) -> Dict[str, np.ndarray]:
     decoder_inputs: Dict[str, np.ndarray] = {}
     for input_name in getattr(decoder_session, "input_names", []):
         if "past_key." in input_name or "past_value." in input_name:
-            if input_name in kv_cache:
-                decoder_inputs[input_name] = kv_cache[input_name]
+            kv_tensor = _find_matching_kv_tensor(input_name, kv_cache)
+            if kv_tensor is None:
+                continue
+            if input_name not in decoder_session.binding_index_map:
+                continue
+
+            binding_idx = decoder_session.binding_index_map[input_name]
+            binding = decoder_session.bindings[binding_idx]
+            expected_shape = tuple(int(x) for x in binding.dims)
+            expected_dtype = decoder_session.aic_to_np_dtype_mapping[binding.type]
+            decoder_inputs[input_name] = _align_to_binding_shape(
+                kv_tensor,
+                expected_shape=expected_shape,
+                expected_dtype=expected_dtype,
+            )
     return decoder_inputs
 
 
@@ -306,22 +414,38 @@ def _run_denoising_step(
     step_frac = float(cur_step) / float(max_denoising_steps)
     temperature = float(t_min + ((t_max - t_min) * step_frac))
     input_names = set(getattr(qpc_session, "input_names", []))
+    allowed_seq_lens = _get_allowed_seq_lens_for_input(qpc_session, "input_ids")
+    target_prefix_seq_len = _pick_target_seq_len(allowed_seq_lens, int(prefix_ids.shape[1]))
+    prefix_ids_aligned, prefix_mask_aligned = _pad_or_truncate_prefix(
+        prefix_ids,
+        prefix_mask,
+        target_seq_len=target_prefix_seq_len,
+    )
 
-    model_inputs = {
-        "input_ids": prefix_ids,
-        "attention_mask": prefix_mask,
-        "decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64),
-        "decoder_attention_mask": decoder_attention_mask,
-    }
+    model_inputs = {"decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64)}
+    if "input_ids" in input_names:
+        model_inputs["input_ids"] = prefix_ids_aligned
+    if "attention_mask" in input_names:
+        model_inputs["attention_mask"] = prefix_mask_aligned
+    if "position_ids" in input_names:
+        batch_size = prefix_ids_aligned.shape[0]
+        model_inputs["position_ids"] = np.broadcast_to(
+            np.arange(target_prefix_seq_len, dtype=np.int64),
+            (batch_size, target_prefix_seq_len),
+        ).copy()
+    if "decoder_attention_mask" in input_names:
+        model_inputs["decoder_attention_mask"] = decoder_attention_mask
+    if "self_conditioning_mask" in input_names:
+        model_inputs["self_conditioning_mask"] = np.ones((current_canvas.shape[0],), dtype=np.bool_)
     if self_conditioning_logits is not None and "self_conditioning_logits" in input_names:
         model_inputs["self_conditioning_logits"] = self_conditioning_logits.cpu().numpy()
 
-    print(f'In diffusion utils step, {prefix_ids.shape}, mask: {prefix_mask.shape}, decoder_input_ids: {current_canvas.shape}')
+    print(f'In diffusion utils step, {prefix_ids_aligned.shape}, mask: {prefix_mask_aligned.shape}, decoder_input_ids: {current_canvas.shape}')
     model_outputs = qpc_session.run(model_inputs)
     logits = torch.from_numpy(model_outputs["logits"])
     processed_logits = logits / max(temperature, 1e-6)
 
-    vocab_size = int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+    vocab_size = model_config.text_config.vocab_size
     probs = torch.softmax(processed_logits, dim=-1, dtype=torch.float32)
     batch_size, canvas_length = current_canvas.shape
     denoiser_canvas = torch.multinomial(probs.view(-1, vocab_size), num_samples=1)
@@ -355,7 +479,8 @@ def _run_decoder_denoising_loop(
     finished_sequences: torch.Tensor,
     decoder_forward_passes: torch.Tensor,
 ):
-    vocab_size = int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+    vocab_size = model_config.text_config.vocab_size# int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+    
     input_names = set(getattr(decoder_session, "input_names", []))
     kv_inputs = _build_decoder_kv_inputs(decoder_session=decoder_session, kv_cache=kv_cache)
     argmax_canvas = current_canvas.clone()
@@ -372,7 +497,7 @@ def _run_decoder_denoising_loop(
         }
         if self_conditioning_logits is not None and "self_conditioning_logits" in input_names:
             model_inputs["self_conditioning_logits"] = self_conditioning_logits.cpu().numpy().astype(np.float32)
-
+        print('Decoder block is running')
         model_outputs = decoder_session.run(model_inputs)
         logits = torch.from_numpy(model_outputs["logits"])
         processed_logits = logits_processor(scores=logits, cur_step=cur_step)
@@ -452,10 +577,11 @@ def diffusion_gemma_generate_ai100_split(
     kv_cache = _run_encoder_block(encoder_session=encoder_session, input_ids=input_ids_t)
     print(f'Encoder block is finished kv_cache is {max_new_tokens} and input ids is {input_ids_t.shape}')
     for block_idx in range(max_new_canvases):
+        print(f'Running decoder block {block_idx}')
         if torch.all(finished_sequences):
             break
 
-        vocab_size = int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
+        vocab_size = model_config.text_config.vocab_size# int(getattr(model_config.text_config, "vocab_size", model_config.vocab_size))
         if initial_decoder_input_ids is not None and block_idx == 0:
             current_canvas = torch.from_numpy(initial_decoder_input_ids).to(torch.int64)
         else:
@@ -739,11 +865,12 @@ def diffusion_gemma_generate_dispatch(
     if isinstance(self_conditioning_logits, torch.Tensor):
         self_conditioning_logits = self_conditioning_logits.cpu().numpy().astype(np.float32)
 
-    print('In utils ',encoder_qpc_path)
-    print('In utils ',decoder_qpc_path)
+    print('In utils encoder',encoder_qpc_path)
+    print('In utils decoder',decoder_qpc_path)
     if encoder_qpc_path is not None and decoder_qpc_path is not None:
-        encoder_session = QAICInferenceSession(str(encoder_qpc_path), device_id or [None])
-        decoder_session = QAICInferenceSession(str(decoder_qpc_path), device_id or [None])
+        encoder_session = QAICInferenceSession(str(encoder_qpc_path), device_id or None)
+        print('Encoder has finished')
+        decoder_session = QAICInferenceSession(str(decoder_qpc_path), device_id or None)
         runtime_result = diffusion_gemma_generate_ai100_split(
             encoder_session=encoder_session,
             decoder_session=decoder_session,
@@ -763,7 +890,7 @@ def diffusion_gemma_generate_dispatch(
             initial_self_conditioning_logits=self_conditioning_logits,
         )
     else:
-        qpc_session = QAICInferenceSession(str(qpc_path), device_id or [0])
+        qpc_session = QAICInferenceSession(str(qpc_path), None)
         runtime_result = diffusion_gemma_generate_ai100(
             qpc_session=qpc_session,
             model_config=model.config,

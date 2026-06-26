@@ -16,13 +16,13 @@ NUM_LANG_HIDDEN_LAYER = 2
 PREFILL_SEQ_LEN = 32
 CTX_LEN = 1024
 BATCH_SIZE = 1
-GENERATION_LEN = 128
+GENERATION_LEN = 256
 PROMPT = "Please explain how diffusion language models iteratively denoise a random canvas, denoise a random canvas,  "
 EXPORT_ROOT = Path(
-    "/home/jsaisaga/qeff_llama/test_diffusion_gemma_2layers/onnx"
+    "/home/jsaisaga/qeff_llama/test_diffusion_gemma_1QPC_2lay/onnx"
 )
 COMPILE_ROOT = Path(
-    "/home/jsaisaga/qeff_llama/test_diffusion_gemma_2layers/qpc"
+    "/home/jsaisaga/qeff_llama/test_diffusion_gemma_1QPC_2lay/qpc"
 )
 
 
@@ -38,7 +38,8 @@ def _apply_reduced_layer_config(config, num_lang_layers: int):
 
 def main():
     config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    config = _apply_reduced_layer_config(config, num_lang_layers=NUM_LANG_HIDDEN_LAYER)
+    if NUM_LANG_HIDDEN_LAYER is not None:
+        config = _apply_reduced_layer_config(config, num_lang_layers=NUM_LANG_HIDDEN_LAYER)
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
     tokenizer = processor.tokenizer
 
@@ -50,7 +51,6 @@ def main():
         kv_offload=True,
         ignore_mismatched_sizes=True,
     )
-
     base_model = qeff_model.model
 
     # 1) Export encoder ONNX
@@ -80,7 +80,7 @@ def main():
     qeff_model.model = base_model
 
     canvas_len = int(getattr(config, "canvas_length", 256))
-
+    print('ONNX IS GENERATED. COMPILATION IS STARTING')
     # 3) Compile encoder QPC
     encoder_specializations = [{"batch_size": BATCH_SIZE, "seq_len": PREFILL_SEQ_LEN}]
     encoder_qpc = qeff_model._compile(
@@ -93,6 +93,7 @@ def main():
         mdp_ts_num_devices=1,
         aic_num_cores=16,
     )
+    print('ENCODER IS COMPILED. DECODER COMPILATION IS STARTING')
 
     # 4) Compile decoder QPC
     decoder_specializations = [{"batch_size": BATCH_SIZE, "seq_len": canvas_len, "ctx_len": CTX_LEN}]
@@ -106,6 +107,7 @@ def main():
         mdp_ts_num_devices=1,
         aic_num_cores=16,
     )
+    print('DECODER COMPILATION IS FINISHED')
 
     messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}]
     chat_template = getattr(processor, "chat_template", None) or getattr(tokenizer, "chat_template", None)
@@ -126,7 +128,7 @@ def main():
     )
 
     print(f"GENERATED_IDS_SHAPE={output.generated_ids.shape}")
-    print(tokenizer.batch_decode(output.generated_ids, skip_special_tokens=True))
+    print(tokenizer.batch_decode(output.generated_ids, skip_special_tokens=False))
 
     print(f"ENCODER_ONNX={encoder_onnx}")
     print(f"DECODER_ONNX={decoder_onnx}")
