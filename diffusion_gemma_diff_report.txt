@@ -1,0 +1,47 @@
+Diff Report: modeling_diffusion_gemma.py
+
+Compared files:
+- Current: /home/jsaisaga/LongLLaDA/efficient-transformers/QEfficient/transformers/models/diffusion_gemma/modeling_diffusion_gemma.py
+- Fork:    /home/jsaisaga/LongLLaDA/onboarding_agent/efficient-transformers-fork/QEfficient/transformers/models/diffusion_gemma/modeling_diffusion_gemma.py
+
+1) High-level status
+- Files differ (hash mismatch)
+- Diffstat: 1 file changed, 1256 insertions(+), 603 deletions(-)
+
+2) Hashes
+- Current: f0df2a625a40093fa83175819a5cc1eb9e11fca49014de7c19ffa1148e8e515f
+- Fork:    03b5f4bc070b5c44ae82da17c159a3ee723c95bec5a5f1515b52e1f3f20224c2
+
+3) Functions only in current
+- _build_additive_attention_mask
+- _build_diffusion_decoder_additive_attention_mask
+- _norm
+- build_decode_spec
+- build_prefill_spec
+- generate_npi_file
+- get_pkv_dynamic_axes
+- get_qeff_diffusion_decoder
+- get_qeff_diffusion_encoder
+
+4) Functions only in fork
+- _apply_logit_softcapping
+- _build_diffusion_decoder_additive_mask
+- _build_diffusion_encoder_additive_mask
+- _get_mm_tokens_per_image
+- _get_vision_max_patches
+- _inject_vision_embeds
+- _precomputed_rope_gather
+- _repeat_kv
+- build_decoder_canvas_spec
+- build_encoder_prefill_spec
+- get_qeff_canvas_decode
+- get_qeff_encoder_prefill
+- get_qeff_language_decoder
+- get_qeff_vision_encoder
+- update
+
+5) Notable mask-value difference (current recent edit)
+- Current ONNX path uses -1e-4 in _build_additive_attention_mask
+- Fork ONNX encoder-mask path uses -1e4
+
+Generated on: 2026-06-30 (Asia/Kolkata)

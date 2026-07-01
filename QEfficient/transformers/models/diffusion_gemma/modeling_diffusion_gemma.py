@@ -70,36 +70,39 @@ def _build_additive_attention_mask(
         target_length=target_length,
         sliding_window=sliding_window,
     )
-    return causal_mask.to(dtype=dtype) * torch.finfo(dtype).min
+    mask_value = -1e-4 if _is_onnx_export() else torch.finfo(dtype).min
+    return causal_mask.to(dtype=dtype) * mask_value
 
 
 def _build_diffusion_decoder_additive_attention_mask(
-    decoder_attention_mask: Optional[torch.Tensor],
     canvas_length: int,
+    encoder_kv_length: int,
     dtype: torch.dtype,
-    layer_cache_length: Optional[int] = None,
-) -> Optional[torch.Tensor]:
-    if decoder_attention_mask is None:
-        return None
+    batch_size: int,
+    device: torch.device,
+    encoder_attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Bidirectional mask for the diffusion decoder canvas.
 
-    if decoder_attention_mask.dim() != 2:
-        raise ValueError("decoder_attention_mask must be 2D [batch, full_kv_len].")
+    Canvas tokens attend bidirectionally to (a) the *real* encoder KV positions
+    and (b) all other canvas tokens. They must NOT attend to padded/empty encoder
+    cache slots: the encoder cache is sized to ctx_len, but only the first
+    ``seq_len`` slots hold real prompt/image K/V — the remainder is junk that was
+    never meant to be read.
 
-    full_kv_len = decoder_attention_mask.shape[-1]
-    cache_length = full_kv_len - canvas_length
-    if cache_length < 0:
-        raise ValueError("decoder_attention_mask length must be >= canvas_length.")
+    ``encoder_attention_mask`` is the [batch, encoder_kv_length] 1/0 signal
+    (1 = real, 0 = pad). When ``None`` the mask is all-attend.
+    """
+    if encoder_attention_mask is None:
+        total_kv_len = encoder_kv_length + canvas_length
+        return torch.zeros(batch_size, 1, 1, total_kv_len, dtype=dtype, device=device)
 
-    layer_mask = decoder_attention_mask
-    if layer_cache_length is not None and layer_cache_length != cache_length:
-        layer_cache_length = max(min(int(layer_cache_length), cache_length), 0)
-        encoder_mask = decoder_attention_mask[:, cache_length - layer_cache_length : cache_length]
-        canvas_mask = decoder_attention_mask[:, cache_length:]
-        layer_mask = torch.cat([encoder_mask, canvas_mask], dim=-1)
-
-    invalid_positions = ~layer_mask.bool()
-    additive_mask = invalid_positions[:, None, None, :].expand(-1, 1, canvas_length, -1)
-    return additive_mask.to(dtype=dtype) * torch.finfo(dtype).min
+    mask_value = -1e4 if _is_onnx_export() else torch.finfo(dtype).min
+    enc_additive = (1 - encoder_attention_mask.to(dtype)) * mask_value
+    enc_part = enc_additive[:, None, None, :]
+    canvas_part = torch.zeros(enc_part.shape[0], 1, 1, canvas_length, dtype=dtype, device=enc_part.device)
+    return torch.cat([enc_part, canvas_part], dim=-1)
 
 
 class QEffDiffusionGemmaTextRouter(DiffusionGemmaTextRouter):
@@ -579,18 +582,20 @@ class QEffDiffusionGemmaDecoderModel(DiffusionGemmaDecoderModel):
             position_embeddings[layer_type] = self.rotary_emb(hidden_states, decoder_position_ids, layer_type)
 
         canvas_length = decoder_input_ids.shape[1]
-        for i, decoder_layer in enumerate(self.layers[: self.text_config.num_hidden_layers]):
-            layer_cache_length = None
-            if past_key_values is not None and len(past_key_values.layers) > i:
-                layer_keys = past_key_values.layers[i].keys
-                if layer_keys is not None:
-                    layer_cache_length = int(layer_keys.shape[-2])
+        encoder_kv_length = 0
+        if past_key_values is not None and len(past_key_values.layers) > 0:
+            layer = past_key_values.layers[0]
+            if layer.keys is not None:
+                encoder_kv_length = layer.keys.shape[-2]
 
+        for i, decoder_layer in enumerate(self.layers[: self.text_config.num_hidden_layers]):
             layer_attention_mask = _build_diffusion_decoder_additive_attention_mask(
-                decoder_attention_mask=decoder_attention_mask,
                 canvas_length=canvas_length,
-                layer_cache_length=layer_cache_length,
+                encoder_kv_length=encoder_kv_length,
                 dtype=hidden_states.dtype,
+                batch_size=hidden_states.shape[0],
+                device=hidden_states.device,
+                encoder_attention_mask=decoder_attention_mask,
             )
 
             hidden_states = decoder_layer(

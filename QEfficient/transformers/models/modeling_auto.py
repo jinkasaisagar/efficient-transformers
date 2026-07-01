@@ -72,6 +72,7 @@ from QEfficient.transformers.quantizers.quant_transforms import (
     GPTQToMatmulNbitsTransform,
     Mxfp4GptOssExpertDequantizeTransform,
 )
+from QEfficient.transformers.cloud_ai_100_diffusion_utils import cloud_ai_100_diffusion_generate_dispatch
 from QEfficient.transformers.diffusion_gemma_utils import diffusion_gemma_generate_dispatch
 from QEfficient.utils import (
     apply_kv_cache_prefix,
@@ -2957,17 +2958,11 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
 
         if _is_diffusion_gemma_arch(self.model.config):
             qpc_path = kwargs.pop("qpc_path", None)
-            encoder_qpc_path = kwargs.pop("encoder_qpc_path", None)
-            decoder_qpc_path = kwargs.pop("decoder_qpc_path", None)
-
-            return diffusion_gemma_generate(
-                model=self.model,
+            return self.cloud_ai_100_diffusion_generate(
                 inputs=inputs,
+                device_ids=device_ids,
                 runtime_ai100=runtime_ai100,
-                device_id=device_ids,
                 qpc_path=qpc_path,
-                encoder_qpc_path=encoder_qpc_path,
-                decoder_qpc_path=decoder_qpc_path,
                 **kwargs,
             )
 
@@ -2976,6 +2971,25 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
         return self.cloud_ai_100_generate(
             inputs=inputs, device_ids=device_ids, generation_len=generation_len, streamer=streamer
         )
+
+    def cloud_ai_100_diffusion_generate(
+        self,
+        inputs: Optional[torch.Tensor],
+        device_ids: Optional[List[int]] = None,
+        runtime_ai100: bool = True,
+        qpc_path: Optional[Union[str, Path]] = None,
+        **kwargs,
+    ):
+        qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else (qpc_path or self.qpc_path)
+        dispatch = cloud_ai_100_diffusion_generate_dispatch(
+            model=self.model,
+            inputs=inputs,
+            runtime_ai100=runtime_ai100,
+            device_id=device_ids,
+            qpc_path=qpc_path,
+            **kwargs,
+        )
+        return dispatch.runtime_result if runtime_ai100 else dispatch.hf_output
 
     def cloud_ai_100_generate(
         self,

@@ -24,8 +24,8 @@ GENERATION_LEN = 256
 # NUM_LANG_HIDDEN_LAYER = 2
 NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/diffusion_gemma_single_qpc_full_model/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/diffusion_gemma_single_qpc_full_model/qpc")
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/diffusion_gemma_single_qpc_full_model_onnx_min_rectified/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/diffusion_gemma_single_qpc_full_model_onnx_min_rectified/qpc")
 
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
@@ -53,7 +53,7 @@ def build_compile_kwargs(*, effective_prefill_seq_len: int, effective_ctx_len: i
         "ctx_len": effective_ctx_len,
         "num_cores": kwargs["num_cores"],
         "num_devices": kwargs["num_devices"],
-        "mxfp6_matmul": kwargs.get("mxfp6_matmul", False),
+        "mxfp6_matmul": kwargs.get("mxfp6_matmul", True),
         "mxint8_kv_cache": kwargs.get("mxint8_kv_cache", False),
         "aic_enable_depth_first": kwargs.get("aic_enable_depth_first", False),
         "mos": kwargs.get("mos", 1),
