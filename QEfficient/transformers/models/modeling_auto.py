@@ -3376,7 +3376,7 @@ class QEFFAutoModelForImageTextToText:
             model = cls._hf_auto_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
 
         kwargs.update({"enable_proxy": enable_proxy} if enable_proxy else {})
-
+        breakpoint()
         instance = cls(
             model,
             kv_offload=kv_offload,

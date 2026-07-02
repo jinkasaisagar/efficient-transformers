@@ -88,7 +88,7 @@ def main():
         config=config,
         trust_remote_code=True,
         dtype="float32",
-        kv_offload=True,
+        kv_offload=False,
         ignore_mismatched_sizes=True,
     )
     remove_fp16clip_transform_if_disabled(qeff_model, True)
