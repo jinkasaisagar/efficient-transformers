@@ -24,8 +24,8 @@ GENERATION_LEN = 256
 # NUM_LANG_HIDDEN_LAYER = 2
 NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/diffusion_gemma_single_qpc_full_model_onnx_min_rectified/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/diffusion_gemma_single_qpc_full_model_onnx_min_rectified/qpc")
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_full/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_full/qpc")
 
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
@@ -43,11 +43,12 @@ compiler_kwargs = {
     "use_onnx_subfunctions": False,
     # "split_model_io": True,
     "batch_size": BS,
-    # "node_precision_info": NODE_PRECISION_INFO,
+    "node_precision_info": NODE_PRECISION_INFO,
 }
 
 
 def build_compile_kwargs(*, effective_prefill_seq_len: int, effective_ctx_len: int, **kwargs):
+    print('NUmber of devices ', kwargs["num_devices"])
     return {
         "prefill_seq_len": effective_prefill_seq_len,
         "ctx_len": effective_ctx_len,

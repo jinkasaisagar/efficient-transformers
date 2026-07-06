@@ -2866,8 +2866,19 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
             **compiler_options,
         )
 
-        if hasattr(self.model, "get_npi_file") and "node_precision_info" not in compiler_options:
-            compiler_options["node_precision_info"] = self.model.get_npi_file(self.model.name_or_path)
+        if hasattr(self.model, "generate_npi_file") and "node_precision_info" in compiler_options:
+            if isinstance(compiler_options["node_precision_info"], bool) and compiler_options["node_precision_info"]:
+                if onnx_path is None:
+                    raise ValueError("ONNX path is required to generate an NPI file.")
+                compiler_options["node_precision_info"] = self.model.generate_npi_file(onnx_path)
+            elif (
+                isinstance(compiler_options["node_precision_info"], bool)
+                and not compiler_options["node_precision_info"]
+            ):
+                compiler_options.pop("node_precision_info", None)
+
+        # if hasattr(self.model, "get_npi_file") and "node_precision_info" not in compiler_options:
+        #     compiler_options["node_precision_info"] = self.model.get_npi_file(self.model.name_or_path)
 
         custom_io = {}
         target_dtype = getattr(self.model.config, "torch_dtype", torch.float32)
@@ -3376,7 +3387,6 @@ class QEFFAutoModelForImageTextToText:
             model = cls._hf_auto_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
 
         kwargs.update({"enable_proxy": enable_proxy} if enable_proxy else {})
-        breakpoint()
         instance = cls(
             model,
             kv_offload=kv_offload,
