@@ -345,7 +345,9 @@ def _run_encoder_block(
     encoder_session: QAICInferenceSession,
     input_ids: torch.Tensor,
 ) -> Dict[str, np.ndarray]:
+    print('Encoder is running.')
     encoder_outputs = encoder_session.run({"input_ids": input_ids.cpu().numpy().astype(np.int64)})
+    print('Encoder is finished')
     return _collect_kv_cache_from_outputs(encoder_outputs)
 
 

@@ -14,6 +14,9 @@ from QEfficient.transformers.diffusion_gemma_utils import (
     EntropyBoundSamplerConfig,
     LinearTemperatureScheduleLogitsProcessor,
     StableAndConfidentStoppingCriteria,
+    _get_allowed_seq_lens_for_input,
+    _pad_or_truncate_prefix,
+    _pick_target_seq_len,
     _build_decoder_kv_inputs,
     _normalize_eos_token_ids,
     _prepare_runtime_generation_config,
@@ -216,11 +219,20 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
 
     is_prefill = True
     for block_idx in range(max_new_canvases):
+        print(f'Number of canvases is {block_idx}')
         if torch.all(finished_sequences):
             break
 
         # First block prefill uses full prefix; subsequent blocks encode only new canvas tokens.
-        encoder_input_ids = input_ids_t if is_prefill else input_ids_t[:, -canvas_length:]
+        raw_encoder_input_ids = input_ids_t if is_prefill else input_ids_t[:, -canvas_length:]
+        allowed_seq_lens = _get_allowed_seq_lens_for_input(qpc_session, "input_ids")
+        target_seq_len = 288#_pick_target_seq_len(allowed_seq_lens, int(raw_encoder_input_ids.shape[1]))
+        encoder_ids_np, _ = _pad_or_truncate_prefix(
+            raw_encoder_input_ids.cpu().numpy().astype(np.int64),
+            np.ones((raw_encoder_input_ids.shape[0], raw_encoder_input_ids.shape[1]), dtype=np.int64),
+            target_seq_len=target_seq_len,
+        )
+        encoder_input_ids = torch.from_numpy(encoder_ids_np).to(torch.int64)
         kv_cache = _run_encoder_block(encoder_session=qpc_session, input_ids=encoder_input_ids)
         is_prefill = False
 

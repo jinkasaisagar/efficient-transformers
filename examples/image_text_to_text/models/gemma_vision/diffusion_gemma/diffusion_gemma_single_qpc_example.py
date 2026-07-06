@@ -178,6 +178,7 @@ def main():
     )
 
     qeff_ids = normalize_generated_ids(output.generated_ids)[:, :GENERATION_LEN]
+    print(output.generated_ids)
     print(tokenizer.batch_decode(qeff_ids, skip_special_tokens=True))
     print(output)
     print(f"ONNX_PATH={onnx_path}")
