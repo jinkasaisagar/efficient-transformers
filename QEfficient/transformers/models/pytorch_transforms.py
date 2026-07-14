@@ -382,18 +382,18 @@ from QEfficient.transformers.models.gemma4.modeling_gemma4 import (
     QEffGemma4TextRouter,
     QEffPrefillChunckedGemma4TextExperts,
 )
-if _DIFFUSION_GEMMA_AVAILABLE:
-    from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
-        QEffDiffusionGemmaCustomRMSNormAIC,
+from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
+        QEffDiffusionGemmaRMSNorm,
+        # QEffDiffusionGemmaCustomRMSNormAIC,
         QEffDiffusionGemmaDecoderModel,
         QEffDiffusionGemmaDecoderTextAttention,
         QEffDiffusionGemmaDecoderTextLayer,
-        QEffDiffusionGemmaEncoderModel,
+        # QEffDiffusionGemmaEncoderModel,
         QEffDiffusionGemmaEncoderTextAttention,
         QEffDiffusionGemmaEncoderTextLayer,
         QEffDiffusionGemmaEncoderTextModel,
         QEffDiffusionGemmaForBlockDiffusion,
-        QEffDiffusionGemmaModel,
+        # QEffDiffusionGemmaModel,
         QEffDiffusionGemmaTextExperts,
         QEffDiffusionGemmaTextRouter,
     )
@@ -708,6 +708,7 @@ class CustomOpsTransform(ModuleMappingTransform):
         Glm4MoeRMSNorm: CustomRMSNormAIC,
         Wav2Vec2Encoder: QEffWav2Vec2Encoder,
         Wav2Vec2EncoderStableLayerNorm: QEffWav2Vec2EncoderStableLayerNorm,
+        DiffusionGemmaRMSNorm: QEffDiffusionGemmaRMSNorm,
         # BERT-family: replace _create_attention_masks (uses create_bidirectional_mask,
         # which breaks ONNX tracing) with an ONNX-safe _prepare_4d_attention_mask version.
         BertModel: QEffBertModel,
@@ -720,8 +721,8 @@ class CustomOpsTransform(ModuleMappingTransform):
     }
 
 
-if _DIFFUSION_GEMMA_AVAILABLE:
-    CustomOpsTransform._module_mapping[DiffusionGemmaRMSNorm] = QEffDiffusionGemmaCustomRMSNormAIC
+# if _DIFFUSION_GEMMA_AVAILABLE:
+#     CustomOpsTransform._module_mapping[DiffusionGemmaRMSNorm] = QEffDiffusionGemmaCustomRMSNormAIC
 
 
 class KVCacheTransform(ModuleMappingTransform):
@@ -953,6 +954,16 @@ class KVCacheTransform(ModuleMappingTransform):
         WhisperDecoder: QEffWhisperDecoder,
         WhisperModel: QEffWhisperModel,
         WhisperForConditionalGeneration: QEffWhisperForConditionalGeneration,
+        # DiffusionGemma
+        # DiffusionGemmaEncoderTextAttention: QEffDiffusionGemmaEncoderTextAttention,
+        # DiffusionGemmaDecoderTextAttention: QEffDiffusionGemmaDecoderTextAttention,
+        # DiffusionGemmaEncoderTextLayer: QEffDiffusionGemmaEncoderTextLayer,
+        # DiffusionGemmaDecoderTextLayer: QEffDiffusionGemmaDecoderTextLayer,
+        # DiffusionGemmaDecoderModel: QEffDiffusionGemmaDecoderModel,
+        # DiffusionGemmaEncoderTextModel: QEffDiffusionGemmaEncoderTextModel,
+        DiffusionGemmaForBlockDiffusion: QEffDiffusionGemmaForBlockDiffusion,
+        # DiffusionGemmaTextExperts: QEffDiffusionGemmaTextExperts,
+        # DiffusionGemmaTextRouter: QEffDiffusionGemmaTextRouter,
     }
 
     @classmethod
@@ -960,7 +971,7 @@ class KVCacheTransform(ModuleMappingTransform):
         model, transformed = super().apply(model)
         return model, transformed
 
-
+'''
 if _DIFFUSION_GEMMA_AVAILABLE:
     KVCacheTransform._module_mapping.update(
         {
@@ -977,7 +988,7 @@ if _DIFFUSION_GEMMA_AVAILABLE:
             DiffusionGemmaTextRouter: QEffDiffusionGemmaTextRouter,
         }
     )
-
+'''
 
 class PrefillOnlyTransform(ModuleMappingTransform):
     _module_mapping = {

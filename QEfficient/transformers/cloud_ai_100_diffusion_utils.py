@@ -62,6 +62,7 @@ def _denoising_step(
     logits_processor: LinearTemperatureScheduleLogitsProcessor,
     stopper: Optional[StableAndConfidentStoppingCriteria],
     finished_denoising: torch.Tensor,
+    decoder_attention_mask: Optional[np.ndarray] = None,
 ):
     vocab_size = model_config.text_config.vocab_size
     input_names = set(getattr(qpc_session, "input_names", []))
@@ -70,6 +71,10 @@ def _denoising_step(
         "decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64),
         **kv_inputs,
     }
+    if "is_encode" in input_names:
+        model_inputs["is_encode"] = np.ones((2,), dtype=np.int64)
+    if decoder_attention_mask is not None and "decoder_attention_mask" in input_names:
+        model_inputs["decoder_attention_mask"] = decoder_attention_mask.astype(np.int64)
     if self_conditioning_logits is not None and "self_conditioning_logits" in input_names:
         model_inputs["self_conditioning_logits"] = self_conditioning_logits.cpu().numpy().astype(np.float32)
 
@@ -119,6 +124,7 @@ def _run_decoder_denoising_loop(
     stopper: Optional[StableAndConfidentStoppingCriteria],
     finished_sequences: torch.Tensor,
     decoder_forward_passes: torch.Tensor,
+    decoder_attention_mask: Optional[np.ndarray] = None,
 ) -> torch.Tensor:
     kv_inputs = _build_decoder_kv_inputs(decoder_session=qpc_session, kv_cache=kv_cache)
     argmax_canvas = current_canvas.clone()
@@ -141,6 +147,7 @@ def _run_decoder_denoising_loop(
             logits_processor=logits_processor,
             stopper=stopper,
             finished_denoising=finished_denoising,
+            decoder_attention_mask=decoder_attention_mask,
         )
         if torch.all(finished_denoising):
             break
@@ -225,15 +232,22 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
 
         # First block prefill uses full prefix; subsequent blocks encode only new canvas tokens.
         raw_encoder_input_ids = input_ids_t if is_prefill else input_ids_t[:, -canvas_length:]
+        raw_encoder_attention_mask = attention_mask_t if is_prefill else attention_mask_t[:, -canvas_length:]
         allowed_seq_lens = _get_allowed_seq_lens_for_input(qpc_session, "input_ids")
-        target_seq_len = 288#_pick_target_seq_len(allowed_seq_lens, int(raw_encoder_input_ids.shape[1]))
-        encoder_ids_np, _ = _pad_or_truncate_prefix(
+        target_seq_len = 256#_pick_target_seq_len(allowed_seq_lens, int(raw_encoder_input_ids.shape[1]))
+        encoder_ids_np, encoder_mask_np = _pad_or_truncate_prefix(
             raw_encoder_input_ids.cpu().numpy().astype(np.int64),
-            np.ones((raw_encoder_input_ids.shape[0], raw_encoder_input_ids.shape[1]), dtype=np.int64),
+            raw_encoder_attention_mask.cpu().numpy().astype(np.int64),
             target_seq_len=target_seq_len,
         )
         encoder_input_ids = torch.from_numpy(encoder_ids_np).to(torch.int64)
-        kv_cache = _run_encoder_block(encoder_session=qpc_session, input_ids=encoder_input_ids)
+        encoder_attention_mask = torch.from_numpy(encoder_mask_np).to(torch.int64)
+        hidden_states, kv_cache = _run_encoder_block(
+            encoder_session=qpc_session,
+            input_ids=encoder_input_ids,
+            attention_mask=encoder_attention_mask,
+        )
+        return hidden_states
         is_prefill = False
 
         current_canvas, self_conditioning_logits = _prepare_denoiser_inputs(
@@ -256,6 +270,7 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             t_max=t_max,
             max_denoising_steps=max_denoising_steps,
         )
+        decoder_attention_mask = encoder_mask_np
 
         denoised_canvas = _run_decoder_denoising_loop(
             qpc_session=qpc_session,
@@ -269,6 +284,7 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             stopper=stopper,
             finished_sequences=finished_sequences,
             decoder_forward_passes=decoder_forward_passes,
+            decoder_attention_mask=decoder_attention_mask,
         )
 
         input_ids_t = torch.cat([input_ids_t, denoised_canvas], dim=-1)

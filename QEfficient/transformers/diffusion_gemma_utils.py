@@ -215,6 +215,7 @@ def _retained_output_to_state_input(name: str) -> str:
 
 def _collect_kv_cache_from_outputs(outputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     cache = {}
+    # breakpoint()
     for name, value in outputs.items():
         if "past_key." in name or "past_value." in name:
             cache[_retained_output_to_state_input(name)] = value
@@ -305,6 +306,7 @@ def _pad_or_truncate_prefix(
         raise ValueError(f"Prefix ids/mask shape mismatch: ids={ids.shape}, mask={mask.shape}")
 
     cur_len = ids.shape[1]
+    breakpoint()
     if cur_len == target_seq_len:
         return ids, mask
     if cur_len > target_seq_len:
@@ -344,11 +346,18 @@ def _build_decoder_kv_inputs(
 def _run_encoder_block(
     encoder_session: QAICInferenceSession,
     input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
 ) -> Dict[str, np.ndarray]:
-    print('Encoder is running.')
-    encoder_outputs = encoder_session.run({"input_ids": input_ids.cpu().numpy().astype(np.int64)})
-    print('Encoder is finished')
-    return _collect_kv_cache_from_outputs(encoder_outputs)
+    encoder_inputs = {"input_ids": input_ids.cpu().numpy().astype(np.int64)}
+    input_names = set(getattr(encoder_session, "input_names", []))
+    
+    if "is_encode" in input_names:
+        encoder_inputs["is_encode"] = np.ones((1,), dtype=np.int64)
+    if attention_mask is not None and "attention_mask" in input_names:
+        encoder_inputs["attention_mask"] = attention_mask.cpu().numpy().astype(np.int64)
+    encoder_outputs = encoder_session.run(encoder_inputs)
+    # breakpoint()
+    return encoder_outputs['hidden_states'], _collect_kv_cache_from_outputs(encoder_outputs)
 
 
 @torch.no_grad()
@@ -427,6 +436,8 @@ def _run_denoising_step(
     model_inputs = {"decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64)}
     if "input_ids" in input_names:
         model_inputs["input_ids"] = prefix_ids_aligned
+    if "is_encode" in input_names:
+        model_inputs["is_encode"] = np.ones((2,), dtype=np.int64)
     if "attention_mask" in input_names:
         model_inputs["attention_mask"] = prefix_mask_aligned
     if "position_ids" in input_names:

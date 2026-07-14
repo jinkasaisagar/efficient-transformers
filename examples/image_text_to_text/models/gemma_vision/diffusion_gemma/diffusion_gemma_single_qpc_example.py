@@ -179,6 +179,9 @@ def main():
         qpc_path=qpc_path,
     )
     breakpoint()
+    enc_inputs_embeds = qeff_model.model._inject_vision_embeds(inputs["input_ids"],None,None)
+    enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"])
+    # enc_outputs = qeff_model.model.model.encoder.language_model(inputs_embeds=enc_inputs_embeds)
     print('Model Compiled and running original model is started')
     model = DiffusionGemmaForBlockDiffusion.from_pretrained(
         MODEL_ID,

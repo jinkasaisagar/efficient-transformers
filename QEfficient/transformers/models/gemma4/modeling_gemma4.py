@@ -373,7 +373,7 @@ class QEffGemma4TextDecoderLayer(Gemma4TextDecoderLayer):
         return hidden_states
 
 
-class QEffGemma4TextModel(Gemma4TextModel):
+class QEffGemma4TextModel(Gemma4TextModel): 
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
