@@ -8,9 +8,10 @@
 from pathlib import Path
 
 import numpy as np
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoConfig, AutoProcessor, DiffusionGemmaForBlockDiffusion
 
 from QEfficient import QEFFAutoModelForImageTextToText
+import torch
 
 MODEL_ID = "google/diffusiongemma-26B-A4B-it"
 SYSTEM_PROMPT = "You are a helpful assistant."
@@ -18,15 +19,15 @@ TEXT_PROMPT = "Explain how diffusion language models denoise a token canvas."
 TEXT_PROMPT = "Why is the sky blue?"
 
 BS = 1
-PREFILL_SEQ_LEN = 32+256
+PREFILL_SEQ_LEN = 256
 CTX_LEN = 1024
 GENERATION_LEN = 256
-# NUM_LANG_HIDDEN_LAYER = 2
-NUM_LANG_HIDDEN_LAYER = None
+NUM_LANG_HIDDEN_LAYER = 2
+# NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_full/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_full/qpc")
-
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers/qpc")
+torch.manual_seed(42)
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
 # - str path: use provided NPI file.
@@ -139,6 +140,9 @@ def main():
         tokenize=True,
         return_dict=True,
         return_tensors="pt",
+        padding="max_length",
+        max_length=256,
+        truncation=True
     )
     prompt_len = int(inputs["input_ids"].shape[1])
     print(f'Prompt length is {prompt_len}')
@@ -169,13 +173,24 @@ def main():
         compile_dir=str(COMPILE_ROOT),
         **compile_kwargs,
     )
-
-    print('Model Compiled and running is started')
     output = qeff_model.generate(
         inputs=inputs,
         generation_len=GENERATION_LEN,
         qpc_path=qpc_path,
     )
+    breakpoint()
+    print('Model Compiled and running original model is started')
+    model = DiffusionGemmaForBlockDiffusion.from_pretrained(
+        MODEL_ID,
+        dtype="float32",
+        device_map="auto",
+        config=config
+    )
+    output_original_model = model.generate(**inputs, max_new_tokens=256)
+    breakpoint()
+    mad = np.abs((output - output_original_model.detach().float().cpu().numpy())).max()
+    print('Mad score between original and model running on device is ', mad)
+    breakpoint()
 
     qeff_ids = normalize_generated_ids(output.generated_ids)[:, :GENERATION_LEN]
     print(output.generated_ids)
