@@ -6,45 +6,48 @@
 # -----------------------------------------------------------------------------
 
 from pathlib import Path
+import onnxruntime as ort
 
 import numpy as np
 from transformers import AutoConfig, AutoProcessor, DiffusionGemmaForBlockDiffusion
-
+from QEfficient.transformers.cache_utils import QEffGemma4DynamicCache
 from QEfficient import QEFFAutoModelForImageTextToText
 import torch
+from sensivity_analysis import analyze_onnx_fp16_overflow, expose_all_intermediate_outputs_robust
 
 MODEL_ID = "google/diffusiongemma-26B-A4B-it"
 SYSTEM_PROMPT = "You are a helpful assistant."
 TEXT_PROMPT = "Explain how diffusion language models denoise a token canvas."
 TEXT_PROMPT = "Why is the sky blue?"
+TEXT_PROMPT = "How are you?"
 
 BS = 1
 PREFILL_SEQ_LEN = 256
-CTX_LEN = 1024
+CTX_LEN = 256
 GENERATION_LEN = 256
-NUM_LANG_HIDDEN_LAYER = 2
+NUM_LANG_HIDDEN_LAYER = 1
 # NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers/qpc")
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_1layers/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_1layers/qpc")
 torch.manual_seed(42)
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
 # - str path: use provided NPI file.
 # - False/None: skip NPI.
-NODE_PRECISION_INFO = True
+NODE_PRECISION_INFO = False
 
 compiler_kwargs = {
     "num_cores": 16,
     "num_devices": 4,
-    "mxfp6_matmul": True,
+    "mxfp6_matmul": False,
     # "mxint8_kv_cache": True,
     "aic_enable_depth_first": True,
     # "mos": 1,
     "use_onnx_subfunctions": False,
     # "split_model_io": True,
     "batch_size": BS,
-    "node_precision_info": NODE_PRECISION_INFO,
+    # "node_precision_info": NODE_PRECISION_INFO,
 }
 
 
@@ -80,7 +83,7 @@ def normalize_generated_ids(generated_ids):
 
 def effective_lens(model, prefill_seq_len: int, ctx_len: int, prompt_len: int, generation_len: int, skip_vision: bool):
     del model, skip_vision
-    effective_ctx_len = max(ctx_len, prompt_len + generation_len)
+    effective_ctx_len = max(prefill_seq_len, prompt_len) #max(ctx_len, prompt_len + generation_len)
     effective_prefill_seq_len = max(prefill_seq_len, prompt_len)
     return effective_prefill_seq_len, effective_ctx_len
 
@@ -144,6 +147,7 @@ def main():
         max_length=256,
         truncation=True
     )
+    print(inputs)
     prompt_len = int(inputs["input_ids"].shape[1])
     print(f'Prompt length is {prompt_len}')
     effective_prefill_seq_len, effective_ctx_len = effective_lens(
@@ -154,11 +158,15 @@ def main():
         GENERATION_LEN,
         skip_vision=True,
     )
+    # breakpoint()
     compile_kwargs = build_compile_kwargs(
         effective_prefill_seq_len=effective_prefill_seq_len,
         effective_ctx_len=effective_ctx_len,
+        node_precision_info = '/home/jsaisaga/LongLLaDA/efficient-transformers/examples/image_text_to_text/models/gemma_vision/diffusion_gemma/fp32_nodes_DiffusionGemmaForBlockDiffusion.yaml',
         **compiler_kwargs,
     )
+    
+    # breakpoint()
     print(f'Effective Prompt length which includes prompt length + generation length is {effective_prefill_seq_len}')
 
     onnx_path = qeff_model.export(
@@ -173,23 +181,58 @@ def main():
         compile_dir=str(COMPILE_ROOT),
         **compile_kwargs,
     )
-    output = qeff_model.generate(
-        inputs=inputs,
-        generation_len=GENERATION_LEN,
-        qpc_path=qpc_path,
-    )
-    breakpoint()
-    enc_inputs_embeds = qeff_model.model._inject_vision_embeds(inputs["input_ids"],None,None)
+    input_ids = inputs["input_ids"]  # torch.LongTensor [B, S]
+    B, S = input_ids.shape
+    text_cfg = qeff_model.model.config.text_config
+
+    # Shared cache object (must exist before call)
+    pkv = QEffGemma4DynamicCache(config=text_cfg)
+    for i in range(text_cfg.num_hidden_layers):
+        pkv.append_new_layers(i)
+
+    # qeff_model.model(input_ids=inputs["input_ids"], decoder_input_ids=inputs["input_ids"],is_encode=np.ones((1,), dtype=np.int64), past_key_values=pkv)
     enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"])
+    output = qeff_model.generate(inputs=inputs,generation_len=GENERATION_LEN,qpc_path=qpc_path,)
+    breakpoint()
+    mad = np.abs((output - enc_outputs['last_hidden_state'].detach().float().cpu().numpy())).max()
+    session = ort.InferenceSession(str(onnx_path))
+    m = qeff_model.model  # QEffDiffusionGemmaForBlockDiffusion
+
+    # Get full input structure expected by ONNX
+    dummy = m.get_dummy_inputs(kv_offload=False)
+
+    # Replace with your real prompt
+    real_ids = inputs["input_ids"]                      # [B, S]
+    B, S = real_ids.shape
+    dummy["input_ids"] = real_ids
+    dummy["position_ids"] = torch.arange(S).unsqueeze(0).repeat(B, 1).to(real_ids.device)
+
+    # Optional: keep/override mm_token_type_ids if needed
+    if "mm_token_type_ids" in inputs:
+        dummy["mm_token_type_ids"] = inputs["mm_token_type_ids"]
+
+    # Feed ORT
+    ort_inputs = {}
+    for k, v in dummy.items():
+        if k == "past_key_values":
+            for i, (pk, pv) in enumerate(v):
+                ort_inputs[f"past_key.{i}"] = pk.numpy()
+                ort_inputs[f"past_value.{i}"] = pv.numpy()
+        else:
+            ort_inputs[k] = v.numpy()
+    breakpoint()
+    
+    output_names = [o.name for o in session.get_outputs()]
+    # ort_inputs = {k: v.numpy() for k, v in inputs.items()}
+    ort_out = dict(zip(output_names, session.run(output_names, ort_inputs)))
+    expose_all_intermediate_outputs_robust('/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers/onnx-998a1cb621b818cb/DiffusionGemmaForBlockDiffusion.onnx')
+    analyze_onnx_fp16_overflow('/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers/onnx-998a1cb621b818cb/DiffusionGemmaForBlockDiffusion.onnx', ort_inputs)
+ 
+    # enc_inputs_embeds = qeff_model.model._inject_vision_embeds(inputs["input_ids"],None,None)
     # enc_outputs = qeff_model.model.model.encoder.language_model(inputs_embeds=enc_inputs_embeds)
     print('Model Compiled and running original model is started')
-    model = DiffusionGemmaForBlockDiffusion.from_pretrained(
-        MODEL_ID,
-        dtype="float32",
-        device_map="auto",
-        config=config
-    )
-    output_original_model = model.generate(**inputs, max_new_tokens=256)
+    model = DiffusionGemmaForBlockDiffusion.from_pretrained(MODEL_ID,dtype="float32",device_map="auto",config=config)
+    output_original_model = model.generate(inputs['input_ids'], max_new_tokens=256)
     breakpoint()
     mad = np.abs((output - output_original_model.detach().float().cpu().numpy())).max()
     print('Mad score between original and model running on device is ', mad)
