@@ -397,6 +397,7 @@ class QEFFBaseModel(ABC):
                 input_names=input_names,
                 output_names=output_names,
                 dynamic_axes=dynamic_axes,
+                verbose=True,
                 opset_version=constants.ONNX_EXPORT_OPSET,
                 **export_kwargs,
             )

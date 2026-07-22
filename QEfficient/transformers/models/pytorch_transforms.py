@@ -384,7 +384,7 @@ from QEfficient.transformers.models.gemma4.modeling_gemma4 import (
 )
 from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
         QEffDiffusionGemmaRMSNorm,
-        # QEffDiffusionGemmaCustomRMSNormAIC,
+        QEffDiffusionGemmaCustomRMSNormAIC,
         QEffDiffusionGemmaDecoderModel,
         QEffDiffusionGemmaDecoderTextAttention,
         QEffDiffusionGemmaDecoderTextLayer,
@@ -708,7 +708,8 @@ class CustomOpsTransform(ModuleMappingTransform):
         Glm4MoeRMSNorm: CustomRMSNormAIC,
         Wav2Vec2Encoder: QEffWav2Vec2Encoder,
         Wav2Vec2EncoderStableLayerNorm: QEffWav2Vec2EncoderStableLayerNorm,
-        DiffusionGemmaRMSNorm: QEffDiffusionGemmaRMSNorm,
+        DiffusionGemmaRMSNorm: QEffDiffusionGemmaCustomRMSNormAIC,
+        # DiffusionGemmaRMSNorm: QEffDiffusionGemmaRMSNorm,
         # BERT-family: replace _create_attention_masks (uses create_bidirectional_mask,
         # which breaks ONNX tracing) with an ONNX-safe _prepare_4d_attention_mask version.
         BertModel: QEffBertModel,
@@ -955,15 +956,15 @@ class KVCacheTransform(ModuleMappingTransform):
         WhisperModel: QEffWhisperModel,
         WhisperForConditionalGeneration: QEffWhisperForConditionalGeneration,
         # DiffusionGemma
-        # DiffusionGemmaEncoderTextAttention: QEffDiffusionGemmaEncoderTextAttention,
-        # DiffusionGemmaDecoderTextAttention: QEffDiffusionGemmaDecoderTextAttention,
-        # DiffusionGemmaEncoderTextLayer: QEffDiffusionGemmaEncoderTextLayer,
-        # DiffusionGemmaDecoderTextLayer: QEffDiffusionGemmaDecoderTextLayer,
-        # DiffusionGemmaDecoderModel: QEffDiffusionGemmaDecoderModel,
-        # DiffusionGemmaEncoderTextModel: QEffDiffusionGemmaEncoderTextModel,
+        DiffusionGemmaEncoderTextAttention: QEffDiffusionGemmaEncoderTextAttention,
+        DiffusionGemmaDecoderTextAttention: QEffDiffusionGemmaDecoderTextAttention,
+        DiffusionGemmaEncoderTextLayer: QEffDiffusionGemmaEncoderTextLayer,
+        DiffusionGemmaDecoderTextLayer: QEffDiffusionGemmaDecoderTextLayer,
+        DiffusionGemmaDecoderModel: QEffDiffusionGemmaDecoderModel,
+        DiffusionGemmaEncoderTextModel: QEffDiffusionGemmaEncoderTextModel,
         DiffusionGemmaForBlockDiffusion: QEffDiffusionGemmaForBlockDiffusion,
-        # DiffusionGemmaTextExperts: QEffDiffusionGemmaTextExperts,
-        # DiffusionGemmaTextRouter: QEffDiffusionGemmaTextRouter,
+        DiffusionGemmaTextExperts: QEffDiffusionGemmaTextExperts,
+        DiffusionGemmaTextRouter: QEffDiffusionGemmaTextRouter,
     }
 
     @classmethod

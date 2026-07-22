@@ -306,7 +306,6 @@ def _pad_or_truncate_prefix(
         raise ValueError(f"Prefix ids/mask shape mismatch: ids={ids.shape}, mask={mask.shape}")
 
     cur_len = ids.shape[1]
-    breakpoint()
     if cur_len == target_seq_len:
         return ids, mask
     if cur_len > target_seq_len:
@@ -348,16 +347,19 @@ def _run_encoder_block(
     input_ids: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Dict[str, np.ndarray]:
-    encoder_inputs = {"input_ids": input_ids.cpu().numpy().astype(np.int64)}
+    # breakpoint()
+    encoder_inputs = {"input_ids": input_ids}
+    # encoder_inputs = {"input_ids": input_ids.cpu().numpy().astype(np.int64)}
     input_names = set(getattr(encoder_session, "input_names", []))
     
     if "is_encode" in input_names:
         encoder_inputs["is_encode"] = np.ones((1,), dtype=np.int64)
-    if attention_mask is not None and "attention_mask" in input_names:
-        encoder_inputs["attention_mask"] = attention_mask.cpu().numpy().astype(np.int64)
+    # if attention_mask is not None and "attention_mask" in input_names:
+    #     encoder_inputs["attention_mask"] = attention_mask.cpu().numpy().astype(np.int64)
+    encoder_inputs["position_ids"] = np.arange(0,256).reshape(1,-1)
     encoder_outputs = encoder_session.run(encoder_inputs)
-    # breakpoint()
-    return encoder_outputs['hidden_states'], _collect_kv_cache_from_outputs(encoder_outputs)
+    breakpoint()
+    return encoder_outputs['hidden_states']#, encoder_outputs['position_ids'], _collect_kv_cache_from_outputs(encoder_outputs)
 
 
 @torch.no_grad()

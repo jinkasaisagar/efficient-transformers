@@ -1479,6 +1479,19 @@ class QEffGemma4DynamicCache(QEffDynamicCache):
             )
         return cache
 
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        *args,
+        **kwargs,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Ensure target layer exists before delegating to Cache.update(),
+        # which directly indexes self.layers[layer_idx].
+        self.append_new_layers(layer_idx)
+        return super().update(key_states, value_states, layer_idx, *args, **kwargs)
+
 
 class QEffGemma4DynamicLayer(QEffDynamicLayer):
     def __init__(self, is_sliding: bool = False):

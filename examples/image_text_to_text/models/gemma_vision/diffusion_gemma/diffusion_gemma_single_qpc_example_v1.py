@@ -28,8 +28,8 @@ GENERATION_LEN = 256
 NUM_LANG_HIDDEN_LAYER = 2
 # NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_test/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_test/qpc")
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers_only_encoder_no_npi/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_npi_agent_2layers_only_encoder_no_npi/qpc")
 torch.manual_seed(42)
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
@@ -65,7 +65,7 @@ def build_compile_kwargs(*, effective_prefill_seq_len: int, effective_ctx_len: i
         "use_onnx_subfunctions": kwargs.get("use_onnx_subfunctions", False),
         "split_model_io": kwargs.get("split_model_io", True),
         "batch_size": kwargs.get("batch_size", 1),
-        "node_precision_info": kwargs.get("node_precision_info", False),
+        # "node_precision_info": kwargs.get("node_precision_info", False),
     }
 
 
@@ -184,15 +184,12 @@ def main():
     B, S = input_ids.shape
     text_cfg = qeff_model.model.config.text_config
 
-    # Match generate() path: first encoder call with fresh/empty cache.
-    pkv = qeff_model.model.get_dummy_pkv_cache(config.text_config, 1, 256)
+    # Shared cache object (must exist before call)
+    pkv = qeff_model.model.get_dummy_pkv_cache(config.text_config,1,256)
 
     # breakpoint()
     # enc_outputs = qeff_model.model(input_ids=inputs["input_ids"], decoder_input_ids=inputs["input_ids"],is_encode=np.ones((1,), dtype=np.int64), past_key_values=pkv)
-    from QEfficient.transformers.cache_utils import QEffGemma4DynamicCache
-    empty_pkv = QEffGemma4DynamicCache(config=qeff_model.model.config.text_config)
-    enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=empty_pkv, use_cache=True,)
-    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True,)
+    enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"], past_key_values=pkv)
     # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"])
     output = qeff_model.generate(inputs=inputs,generation_len=GENERATION_LEN,qpc_path=qpc_path,)
     breakpoint()

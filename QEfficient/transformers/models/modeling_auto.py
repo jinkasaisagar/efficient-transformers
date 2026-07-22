@@ -2865,7 +2865,6 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
             img_size=img_size,
             **compiler_options,
         )
-
         if hasattr(self.model, "generate_npi_file") and "node_precision_info" in compiler_options:
             if isinstance(compiler_options["node_precision_info"], bool) and compiler_options["node_precision_info"]:
                 if onnx_path is None:
@@ -2897,6 +2896,7 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
         compiler_options.pop("continuous_batching", None)
         compiler_options.pop("kv_cache_batch_size", None)
         compiler_options.pop("full_batch_size", None)
+        breakpoint()
         self._compile(
             onnx_path=onnx_path,
             compile_dir=compile_dir,

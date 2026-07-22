@@ -150,7 +150,6 @@ class QEffGemma4CustomRMSNormAIC(nn.Module):
             if getattr(self, "with_scale", True):
                 normed_output = normed_output * self.weight.float()
             return normed_output.type_as(hidden_states)
-
         if getattr(self, "with_scale", True):
             weight = self.weight
         else:

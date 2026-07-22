@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import torch
 
-from QEfficient.generation.cloud_infer import QAICInferenceSession
+from QEfficient.generation.cloud_infer import QAICInferenceSession, is_retained_state_name
 from QEfficient.transformers.diffusion_gemma_utils import (
     DiffusionGemmaGenerateDispatch,
     DiffusionGemmaRuntimeResult,
@@ -242,7 +242,8 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
         )
         encoder_input_ids = torch.from_numpy(encoder_ids_np).to(torch.int64)
         encoder_attention_mask = torch.from_numpy(encoder_mask_np).to(torch.int64)
-        hidden_states, kv_cache = _run_encoder_block(
+        encoder_input_ids = input_ids
+        hidden_states = _run_encoder_block(
             encoder_session=qpc_session,
             input_ids=encoder_input_ids,
             attention_mask=encoder_attention_mask,
@@ -255,7 +256,8 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             batch_size=batch_size,
             canvas_length=canvas_length,
             block_idx=block_idx,
-            initial_decoder_input_ids=initial_decoder_input_ids,
+            initial_decoder_input_ids=encoder_input_ids,
+            # initial_decoder_input_ids=initial_decoder_input_ids,
             initial_self_conditioning_logits=initial_self_conditioning_logits,
         )
         vocab_size = model_config.text_config.vocab_size
@@ -270,7 +272,7 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             t_max=t_max,
             max_denoising_steps=max_denoising_steps,
         )
-        decoder_attention_mask = encoder_mask_np
+        # decoder_attention_mask = encoder_mask_np
 
         denoised_canvas = _run_decoder_denoising_loop(
             qpc_session=qpc_session,
@@ -284,7 +286,7 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             stopper=stopper,
             finished_sequences=finished_sequences,
             decoder_forward_passes=decoder_forward_passes,
-            decoder_attention_mask=decoder_attention_mask,
+            # decoder_attention_mask=decoder_attention_mask,
         )
 
         input_ids_t = torch.cat([input_ids_t, denoised_canvas], dim=-1)
@@ -330,14 +332,8 @@ def cloud_ai_100_diffusion_generate_dispatch(
     generation_config = _prepare_runtime_generation_config(model=model, kwargs=kwargs)
     decoder_input_ids = kwargs.pop("decoder_input_ids", None)
     self_conditioning_logits = kwargs.pop("self_conditioning_logits", None)
-
-    if inputs is None:
-        raise ValueError("`inputs` is required.")
-
     input_ids_tensor = inputs.get("input_ids", None)
-    if input_ids_tensor is None:
-        raise ValueError("`inputs` must contain `input_ids`.")
-
+    
     if isinstance(input_ids_tensor, np.ndarray):
         input_ids = input_ids_tensor.astype(np.int64)
     else:
@@ -361,6 +357,13 @@ def cloud_ai_100_diffusion_generate_dispatch(
             raise ValueError("Pass `qpc_path` for single-QPC diffusion generation.")
 
         qpc_session = QAICInferenceSession(str(qpc_path), device_id or None)
+        qpc_session.skip_buffers(
+            [
+                x
+                for x in qpc_session.input_names + qpc_session.output_names
+                if is_retained_state_name(x) or x.endswith("_RetainedState")
+            ]
+        )
         runtime_result = _cloud_ai_100_diffusion_generate_single_qpc(
             qpc_session=qpc_session,
             model_config=model.config,

@@ -1,0 +1,4 @@
+FP32NodeInstanceNames:
+ - /language_model/layers.1/Mul_output_0
+ - /language_model/norm/CustomRMSNorm_output_0
+ 
