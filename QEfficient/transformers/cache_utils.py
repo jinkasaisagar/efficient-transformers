@@ -1514,9 +1514,13 @@ class QEffGemma4DynamicLayer(QEffDynamicLayer):
         value_states: torch.Tensor,
         cache_kwargs: Optional[dict[str, Any]] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # self.keys = key_states
+        # self.values = value_states
+        # self._mark_initialized(self.keys)
+        # return self.keys, self.values
+        # return super().update(key_states, value_states, cache_kwargs)
         if not self.is_sliding or cache_kwargs is None:
             return super().update(key_states, value_states, cache_kwargs)
-
         if self.keys is None:
             self.keys = key_states
             self.values = value_states
@@ -1529,11 +1533,7 @@ class QEffGemma4DynamicLayer(QEffDynamicLayer):
         layer_ctx_len = self.keys.shape[2]
 
         kv_position_ids = torch.where(position_ids == -1, position_ids, position_ids % layer_ctx_len)
-        kv_position_ids = torch.where(
-            position_ids.max() >= (layer_ctx_len - 1) * 2,
-            (position_ids + 1) % layer_ctx_len,
-            kv_position_ids,
-        )
+        kv_position_ids = torch.where(position_ids.max() >= (layer_ctx_len - 1) * 2,(position_ids + 1) % layer_ctx_len,kv_position_ids,)
 
         valid_mask = (kv_position_ids != -1).unsqueeze(1).unsqueeze(-1)
         key_states = torch.where(valid_mask, key_states, torch.zeros_like(key_states))
@@ -1562,6 +1562,7 @@ class QEffGemma4DynamicLayer(QEffDynamicLayer):
         rolling_indices = torch.where(all_indices > layer_ctx_len - 1, all_indices % layer_ctx_len, all_indices)
         rolling_indices = rolling_indices[:ctx_len]
         use_rolling_indices = position_ids.max() >= (layer_ctx_len - 1)
+        # final_indices = ctx_indices
         final_indices = torch.where(use_rolling_indices, rolling_indices, ctx_indices)
 
         if batch_index is not None:

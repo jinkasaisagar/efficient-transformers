@@ -2896,7 +2896,7 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
         compiler_options.pop("continuous_batching", None)
         compiler_options.pop("kv_cache_batch_size", None)
         compiler_options.pop("full_batch_size", None)
-        breakpoint()
+        # breakpoint()
         self._compile(
             onnx_path=onnx_path,
             compile_dir=compile_dir,

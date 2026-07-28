@@ -428,7 +428,7 @@ class QEffDiffusionGemmaEncoderTextAttention(DiffusionGemmaEncoderTextAttention)
 
         value_states = self.v_norm(value_states)
         value_states = value_states.transpose(1, 2)
-
+        # breakpoint()
         if past_key_values is not None:
             key_states, value_states = past_key_values.update(
                 key_states, value_states, self.layer_idx, {"position_ids": position_ids}
@@ -480,7 +480,7 @@ class QEffDiffusionGemmaDecoderTextAttention(DiffusionGemmaDecoderTextAttention)
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
-        breakpoint()
+        # breakpoint()
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -572,7 +572,7 @@ class QEffDiffusionGemmaEncoderTextLayer(DiffusionGemmaEncoderTextLayer):
         hidden_states = _saturating_residual_add(hidden_states_1, hidden_states_2)
         hidden_states = self.post_feedforward_layernorm(hidden_states)
         hidden_states = _saturating_residual_add(residual, hidden_states)
-        breakpoint()
+        # breakpoint()
         hidden_states *= self.layer_scalar
         return hidden_states
 
@@ -682,8 +682,8 @@ class QEffDiffusionGemmaEncoderTextModel(DiffusionGemmaEncoderTextModel):
 
         if input_ids is not None:
             inputs_embeds = self.embed_tokens(input_ids)
-        # breakpoint()
 
+        breakpoint()
         # convert legacy cache to QEffGemma4DynamicCache at model entry
         if use_cache and isinstance(past_key_values, Cache) and not isinstance(past_key_values, QEffGemma4DynamicCache):
             past_key_values = QEffGemma4DynamicCache.from_cache(self.config, past_key_values)
@@ -691,7 +691,6 @@ class QEffDiffusionGemmaEncoderTextModel(DiffusionGemmaEncoderTextModel):
             past_key_values = QEffGemma4DynamicCache.from_legacy_cache(self.config, past_key_values)
         elif use_cache and past_key_values is None:
             past_key_values = QEffGemma4DynamicCache(config=self.config)
-
         if position_ids is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
             position_ids = (
@@ -720,28 +719,6 @@ class QEffDiffusionGemmaEncoderTextModel(DiffusionGemmaEncoderTextModel):
             is_sliding = layer_type == "sliding_attention"
             sliding_window = self.config.sliding_window if is_sliding else None
 
-            # Compute target_length from cached KV.
-            # Keep original logic for reference:
-            # if past_key_values is not None and len(past_key_values.layers) > i:
-            #     layer_keys = past_key_values.layers[i].keys
-            #     if layer_keys is not None and layer_keys.numel() > 0:
-            #         target_length = layer_keys.shape[-2]
-            #     else:
-            #         target_length = (
-            #             min(self.config.sliding_window, self.config.max_position_embeddings)
-            #             if is_sliding
-            #             else inputs_embeds.shape[1]
-            #         )
-            # else:
-            #     target_length = (
-            #         min(self.config.sliding_window, self.config.max_position_embeddings)
-            #         if is_sliding
-            #         else inputs_embeds.shape[1]
-            #     )
-            #
-            # New behavior: when cache for this layer is empty, use current prefill length.
-            # This avoids attn_weights[..., kv_len=seq_len] + mask[..., kv_len=sliding_window]
-            # mismatch on first cached prefill.
             if past_key_values is not None and len(past_key_values.layers) > i:
                 layer_keys = past_key_values.layers[i].keys
                 if layer_keys is not None and layer_keys.numel() > 0:
@@ -766,12 +743,12 @@ class QEffDiffusionGemmaEncoderTextModel(DiffusionGemmaEncoderTextModel):
                 past_key_values=past_key_values,
                 **kwargs,
             )
-        breakpoint()
+        # breakpoint()
         # hidden_states = self.norm((hidden_states))
         # hidden_states = self.norm(_clamp_to_fp16_range(hidden_states))
-        return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=past_key_values)#, position_ids
+        # return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=past_key_values)#, position_ids
         # hidden_states = _clamp_to_fp16_range(hidden_states)
-        # next_cache = past_key_values.to_legacy_cache() if use_cache else None
+        next_cache = past_key_values.to_legacy_cache() if use_cache else None
         return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=past_key_values)
         # return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=next_cache)
 
@@ -822,15 +799,7 @@ class QEffDiffusionGemmaDecoderModel(DiffusionGemmaDecoderModel):
         inputs_embeds = self.self_conditioning(inputs_embeds, soft_embeddings)
 
         canvas_length = inputs_embeds.shape[1]
-        # if decoder_position_ids is None:
-        #     cache_seq_length = past_key_values.get_seq_length(layer_idx=0) if past_key_values is not None else 0
-        #     decoder_position_ids = torch.arange(
-        #         cache_seq_length,
-        #         cache_seq_length + canvas_length,
-        #         device=inputs_embeds.device,
-        #         dtype=torch.long,
-        #     ).unsqueeze(0)
-
+        
         # Build bidirectional decoder mask: canvas attends to real encoder KV +
         # all canvas, NOT to padded/empty encoder cache slots (HF parity).
         encoder_kv_length = 0
@@ -1650,8 +1619,8 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         # Decoder: canvas_logits[bs,canvas_length,vocab] holds the denoised token logits.
         lang_output_names = [
             "hidden_states",
-            "position_ids"
-             #"canvas_logits",
+            # "position_ids"
+             "canvas_logits",
             # "hidden_states_encoder",
             # "vision_embeds_RetainedState",
             # "image_idx_output",
@@ -1802,8 +1771,7 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         batch_index: Optional[torch.LongTensor] = None,
         **kwargs,
     ):
-       
-        del attention_mask, inputs_embeds, labels, use_cache, batch_index, kwargs
+        del attention_mask, inputs_embeds, labels,  batch_index, kwargs
 
         # convert legacy cache to QEffGemma4DynamicCache
         text_cfg = self.config.text_config
@@ -1816,24 +1784,26 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         is_self_cond_decode = self_condition_selector.shape[0] == torch.tensor(1)
         decode_self_conditioning_mask = is_self_cond_decode.view(1).expand(decoder_input_ids.shape[0])
 
-        # Clone KV before encoder to preserve the original ONNX nodes.
-        # ONNX in-place mutation (CtxScatterFunc) rebinds the Python tensor object to
-        # the ScatterND output — without clone, orig_keys would alias the post-scatter node.
-        orig_keys = [layer.keys.clone() for layer in past_key_values.layers]
-        orig_vals = [layer.values.clone() for layer in past_key_values.layers]
 
         # ---- Encoder path (always traced) ----
         #Changed here
         # enc_inputs_embeds, next_image_idx = self._inject_vision_embeds(input_ids, vision_embeds, image_idx)
         # breakpoint()
         enc_inputs_embeds = self._inject_vision_embeds(input_ids, vision_embeds, image_idx)
+        if position_ids is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position = torch.arange(
+                0, past_seen_tokens, device=inputs_embeds.device
+            )
+            position_ids = cache_position.unsqueeze(0)
+
         enc_outputs = self.model.encoder.language_model(
             input_ids=input_ids,
             # inputs_embeds=enc_inputs_embeds,
             # attention_mask=None,
             # position_ids=position_ids,
             # past_key_values=past_key_values,
-            # use_cache=True,
+            # use_cache=use_cache,
             # mm_token_type_ids=mm_token_type_ids,
         )
         enc_keys = [past_key_values.layers[i].keys for i in range(text_cfg.num_hidden_layers)]
@@ -1841,20 +1811,20 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
 
         # INT32 logit gather index
         hidden_states = enc_outputs.last_hidden_state
-        # logit_index = position_ids.to(torch.int32).argmax(1, keepdim=True)
-        # enc_hidden = hidden_states[torch.arange(position_ids.shape[0]).view(-1, 1), logit_index]
-        # enc_logits = self._apply_logit_softcapping(self.lm_head(enc_hidden).float())
-        # canvas_length = decoder_input_ids.shape[1]
-        # enc_canvas_logits = enc_logits.expand(-1, canvas_length, -1)
+        logit_index = position_ids.to(torch.int32).argmax(1, keepdim=True)
+        enc_hidden = hidden_states[torch.arange(position_ids.shape[0]).view(-1, 1), logit_index]
+        enc_logits = self._apply_logit_softcapping(self.lm_head(enc_hidden).float())
+        canvas_length = decoder_input_ids.shape[1]
+        enc_canvas_logits = enc_logits.expand(-1, canvas_length, -1)
 
         # Gate the KV for the decoder to read:
         # Prefill (is_encode=1) → decoder reads encoder-filled KV (enc_keys).
         # Decode  (is_encode=0) → decoder reads retained KV from past_key.i inputs (orig_keys).
         # Write the gated values back into the cache so the decoder reads them.
-        is_f4 = is_enc_bool.view(1, 1, 1, 1)
-        for i in range(text_cfg.num_hidden_layers):
-            past_key_values.layers[i].keys = torch.where(is_f4, enc_keys[i], orig_keys[i])
-            past_key_values.layers[i].values = torch.where(is_f4, enc_vals[i], orig_vals[i])
+        # is_f4 = is_enc_bool.view(1, 1, 1, 1)
+        # for i in range(text_cfg.num_hidden_layers):
+        #     past_key_values.layers[i].keys = torch.where(is_f4, enc_keys[i], orig_keys[i])
+        #     past_key_values.layers[i].values = torch.where(is_f4, enc_vals[i], orig_vals[i])
         
         # ---- Decoder path (always traced) ----
         dec_outputs = self.model.decoder(
@@ -1867,8 +1837,7 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         dec_logits = self._apply_logit_softcapping(self.lm_head(dec_outputs.last_hidden_state).float())
 
         # is_f1 = is_enc_bool.view(1, 1, 1)
-        # canvas_logits = torch.where(is_enc_bool, enc_canvas_logits, dec_logits)
-        #breakpoint()
+        canvas_logits = torch.where(is_enc_bool, enc_canvas_logits, dec_logits)
         hidden_states_ = torch.where(is_enc_bool, hidden_states, dec_outputs.last_hidden_state)
 
         # is_f_idx = is_enc_bool.view(1, 1)
@@ -1880,5 +1849,5 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
             for i in range(text_cfg.num_hidden_layers)
         ]
 
-        return hidden_states_, position_ids, gated_pkv 
-        # return hidden_states_#, canvas_logits, gated_pkv
+        # return hidden_states_, gated_pkv 
+        return hidden_states_, canvas_logits, gated_pkv

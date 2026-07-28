@@ -53,11 +53,12 @@ def _denoising_step(
     *,
     qpc_session: QAICInferenceSession,
     model_config,
-    kv_inputs: Dict[str, np.ndarray],
+    # kv_inputs: Dict[str, np.ndarray],
     current_canvas: torch.Tensor,
     argmax_canvas: torch.Tensor,
     self_conditioning_logits: Optional[torch.Tensor],
     cur_step: int,
+    initial_decode_iter: bool,
     sampler: EntropyBoundSampler,
     logits_processor: LinearTemperatureScheduleLogitsProcessor,
     stopper: Optional[StableAndConfidentStoppingCriteria],
@@ -66,10 +67,10 @@ def _denoising_step(
 ):
     vocab_size = model_config.text_config.vocab_size
     input_names = set(getattr(qpc_session, "input_names", []))
-
+    
     model_inputs = {
         "decoder_input_ids": current_canvas.cpu().numpy().astype(np.int64),
-        **kv_inputs,
+        # **kv_inputs,
     }
     if "is_encode" in input_names:
         model_inputs["is_encode"] = np.ones((2,), dtype=np.int64)
@@ -77,9 +78,15 @@ def _denoising_step(
         model_inputs["decoder_attention_mask"] = decoder_attention_mask.astype(np.int64)
     if self_conditioning_logits is not None and "self_conditioning_logits" in input_names:
         model_inputs["self_conditioning_logits"] = self_conditioning_logits.cpu().numpy().astype(np.float32)
+    if initial_decode_iter:
+        model_inputs['self_condition_selector'] = np.ones((2,), dtype=np.int64)
+    else:
+        model_inputs['self_condition_selector'] = np.ones((1,), dtype=np.int64)
+
 
     model_outputs = qpc_session.run(model_inputs)
-    raw_logits = torch.from_numpy(model_outputs["logits"])
+    # return model_outputs['hidden_states']
+    raw_logits = torch.from_numpy(model_outputs["canvas_logits"])
     processed_logits = logits_processor(scores=raw_logits, cur_step=cur_step)
 
     probs = torch.softmax(processed_logits, dim=-1, dtype=torch.float32)
@@ -88,11 +95,7 @@ def _denoising_step(
     denoiser_canvas = denoiser_canvas.squeeze(-1).view(batch_size, canvas_length)
     new_argmax_canvas = torch.argmax(processed_logits, dim=-1).to(torch.int64)
 
-    accepted_canvas = sampler.accept_canvas(
-        current_canvas=current_canvas,
-        denoiser_canvas=denoiser_canvas,
-        logits=processed_logits,
-    )
+    accepted_canvas = sampler.accept_canvas(current_canvas=current_canvas,denoiser_canvas=denoiser_canvas,logits=processed_logits,)
     new_current_canvas = sampler.renoise_canvas(accepted_canvas).to(torch.int64)
 
     if stopper is not None:
@@ -100,11 +103,7 @@ def _denoising_step(
             new_argmax_canvas = torch.where(finished_denoising[:, None], argmax_canvas, new_argmax_canvas)
             new_current_canvas = torch.where(finished_denoising[:, None], current_canvas, new_current_canvas)
             if self_conditioning_logits is not None:
-                processed_logits = torch.where(
-                    finished_denoising[:, None, None],
-                    self_conditioning_logits,
-                    processed_logits,
-                )
+                processed_logits = torch.where(finished_denoising[:, None, None],self_conditioning_logits,processed_logits,)
         finished_denoising |= stopper(new_argmax_canvas, processed_logits)
 
     return new_current_canvas, new_argmax_canvas, processed_logits, finished_denoising
@@ -115,7 +114,7 @@ def _run_decoder_denoising_loop(
     *,
     qpc_session: QAICInferenceSession,
     model_config,
-    kv_cache: Dict[str, np.ndarray],
+    # kv_cache: OptionalDict[str, np.ndarray],
     current_canvas: torch.Tensor,
     self_conditioning_logits: Optional[torch.Tensor],
     max_denoising_steps: int,
@@ -126,32 +125,35 @@ def _run_decoder_denoising_loop(
     decoder_forward_passes: torch.Tensor,
     decoder_attention_mask: Optional[np.ndarray] = None,
 ) -> torch.Tensor:
-    kv_inputs = _build_decoder_kv_inputs(decoder_session=qpc_session, kv_cache=kv_cache)
+    # kv_inputs = _build_decoder_kv_inputs(decoder_session=qpc_session, kv_cache=kv_cache)
     argmax_canvas = current_canvas.clone()
     finished_denoising = torch.zeros_like(finished_sequences, dtype=torch.bool)
 
     if stopper is not None:
         stopper.reset()
-
+    initial_decode_iter = True
     for cur_step in reversed(range(1, max_denoising_steps + 1)):
+        print(f'Current step of decoder is {cur_step}')
         decoder_forward_passes += (~(finished_denoising | finished_sequences)).to(torch.int64)
+        # decoder_hidden_states = _denoising_step(
         current_canvas, argmax_canvas, self_conditioning_logits, finished_denoising = _denoising_step(
             qpc_session=qpc_session,
             model_config=model_config,
-            kv_inputs=kv_inputs,
             current_canvas=current_canvas,
             argmax_canvas=argmax_canvas,
             self_conditioning_logits=self_conditioning_logits,
             cur_step=cur_step,
+            initial_decode_iter = initial_decode_iter,
             sampler=sampler,
             logits_processor=logits_processor,
             stopper=stopper,
             finished_denoising=finished_denoising,
             decoder_attention_mask=decoder_attention_mask,
         )
+        initial_decode_iter=False
         if torch.all(finished_denoising):
             break
-
+    # return decoder_hidden_states
     return argmax_canvas
 
 
@@ -256,8 +258,8 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             batch_size=batch_size,
             canvas_length=canvas_length,
             block_idx=block_idx,
-            initial_decoder_input_ids=encoder_input_ids,
-            # initial_decoder_input_ids=initial_decoder_input_ids,
+            # initial_decoder_input_ids=current_canvas,
+            initial_decoder_input_ids=initial_decoder_input_ids,
             initial_self_conditioning_logits=initial_self_conditioning_logits,
         )
         vocab_size = model_config.text_config.vocab_size
@@ -274,10 +276,11 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
         )
         # decoder_attention_mask = encoder_mask_np
 
+        max_denoising_steps = 10
         denoised_canvas = _run_decoder_denoising_loop(
+        # decoder_hidden_states = _run_decoder_denoising_loop(
             qpc_session=qpc_session,
             model_config=model_config,
-            kv_cache=kv_cache,
             current_canvas=current_canvas,
             self_conditioning_logits=self_conditioning_logits,
             max_denoising_steps=max_denoising_steps,
@@ -288,7 +291,8 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             decoder_forward_passes=decoder_forward_passes,
             # decoder_attention_mask=decoder_attention_mask,
         )
-
+        breakpoint()
+        # return decoder_hidden_states
         input_ids_t = torch.cat([input_ids_t, denoised_canvas], dim=-1)
         input_ids_t, finished_sequences = _finalize_canvas(
             input_ids_t=input_ids_t,

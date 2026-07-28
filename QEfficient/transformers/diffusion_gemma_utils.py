@@ -215,7 +215,6 @@ def _retained_output_to_state_input(name: str) -> str:
 
 def _collect_kv_cache_from_outputs(outputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     cache = {}
-    # breakpoint()
     for name, value in outputs.items():
         if "past_key." in name or "past_value." in name:
             cache[_retained_output_to_state_input(name)] = value
@@ -347,10 +346,10 @@ def _run_encoder_block(
     input_ids: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Dict[str, np.ndarray]:
-    # breakpoint()
     encoder_inputs = {"input_ids": input_ids}
     # encoder_inputs = {"input_ids": input_ids.cpu().numpy().astype(np.int64)}
     input_names = set(getattr(encoder_session, "input_names", []))
+    print(input_names)
     
     if "is_encode" in input_names:
         encoder_inputs["is_encode"] = np.ones((1,), dtype=np.int64)
@@ -359,7 +358,7 @@ def _run_encoder_block(
     encoder_inputs["position_ids"] = np.arange(0,256).reshape(1,-1)
     encoder_outputs = encoder_session.run(encoder_inputs)
     breakpoint()
-    return encoder_outputs['hidden_states']#, encoder_outputs['position_ids'], _collect_kv_cache_from_outputs(encoder_outputs)
+    return encoder_outputs['hidden_states']#, _collect_kv_cache_from_outputs(encoder_outputs)
 
 
 @torch.no_grad()
@@ -408,7 +407,7 @@ class StableAndConfidentStopper:
         confident = entropy <= self.confidence_threshold
         return stable & confident
 
-
+'''
 @torch.no_grad()
 def _run_denoising_step(
     qpc_session,
@@ -478,7 +477,7 @@ def _run_denoising_step(
     )
     next_canvas = torch.where(~accepted_mask, random_canvas, accepted_canvas).to(torch.int64)
     return next_canvas, argmax_canvas, processed_logits
-
+'''
 
 
 
@@ -620,7 +619,6 @@ def diffusion_gemma_generate_ai100(
         total_time=total_time,
     )
 
-
 def diffusion_gemma_generate_dispatch(
     model,
     qpc_path,
@@ -635,8 +633,6 @@ def diffusion_gemma_generate_dispatch(
     decoder_input_ids = kwargs.pop("decoder_input_ids", None)
     self_conditioning_logits = kwargs.pop("self_conditioning_logits", None)
 
-    if inputs is None:
-        raise ValueError("`inputs` is required. Pass pre-tokenized inputs from processor.apply_chat_template(...).")
     input_ids_tensor = inputs.get("input_ids", None)
     if input_ids_tensor is None:
         raise ValueError("`inputs` must contain `input_ids` for DiffusionGemma generate.")

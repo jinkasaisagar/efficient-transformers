@@ -28,8 +28,8 @@ GENERATION_LEN = 256
 NUM_LANG_HIDDEN_LAYER = 2
 # NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_test/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_test/qpc")
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_2layers_without3lines/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_2layers_without3lines/qpc")
 torch.manual_seed(42)
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
@@ -45,6 +45,7 @@ compiler_kwargs = {
     "aic_enable_depth_first": True,
     # "mos": 1,
     "use_onnx_subfunctions": False,
+    "convert_to_fp16":True,
     # "split_model_io": True,
     "batch_size": BS,
     # "node_precision_info": NODE_PRECISION_INFO,
@@ -191,13 +192,37 @@ def main():
     # enc_outputs = qeff_model.model(input_ids=inputs["input_ids"], decoder_input_ids=inputs["input_ids"],is_encode=np.ones((1,), dtype=np.int64), past_key_values=pkv)
     from QEfficient.transformers.cache_utils import QEffGemma4DynamicCache
     empty_pkv = QEffGemma4DynamicCache(config=qeff_model.model.config.text_config)
-    enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=empty_pkv, use_cache=True,)
-    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True,)
+
+    # breakpoint()
+    position_ids_ten = torch.tensor(np.arange(0,256).reshape(1,-1))
     # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"])
+    # breakpoint()
+    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True,
+    # position_ids=position_ids_ten)
+    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True,)
+    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=empty_pkv, use_cache=True,)
+    # breakpoint()
+    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True,)
+    # breakpoint()
+
+    # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True, position_ids=position_ids_ten)
+    breakpoint()
+    self_conditioning_logits = torch.zeros((1, 256, text_cfg.vocab_size), dtype=torch.float32)
+    is_encode = torch.ones((1,))
+    self_condition_selector = torch.ones((2,))
+    output_model = qeff_model.model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True, position_ids=position_ids_ten, 
+                    is_encode=is_encode, self_condition_selector = self_condition_selector, decoder_input_ids = inputs["input_ids"],
+                    self_conditioning_logits=self_conditioning_logits, decoder_position_ids=position_ids_ten)
     output = qeff_model.generate(inputs=inputs,generation_len=GENERATION_LEN,qpc_path=qpc_path,)
+    model = DiffusionGemmaForBlockDiffusion.from_pretrained(MODEL_ID,dtype="float32",device_map="auto",config=config)
+    output_original_model = model.generate(inputs['input_ids'], max_new_tokens=256)
     breakpoint()
-    mad = np.abs((output - enc_outputs['last_hidden_state'].detach().float().cpu().numpy())).max()
+
+    mad_aic_hf = np.abs((output - output_original_model.detach().float().cpu().numpy())).max()
+    mad_aic_qeff = np.abs((output - output_model[0].detach().cpu().numpy())).max()
+    mad_qeff_hf = np.abs((output_model[0].detach().cpu().numpy() - output_original_model.detach().float().cpu().numpy())).max()
     breakpoint()
+
     session = ort.InferenceSession(str(onnx_path))
     m = qeff_model.model  # QEffDiffusionGemmaForBlockDiffusion
 
