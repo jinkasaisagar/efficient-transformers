@@ -396,7 +396,7 @@ class QEFFBaseModel(ABC):
                 input_names=input_names,
                 output_names=output_names,
                 dynamic_axes=dynamic_axes,
-                verbose=True,
+                # verbose=True,
                 opset_version=constants.ONNX_EXPORT_OPSET,
                 **export_kwargs,
             )
@@ -991,8 +991,11 @@ class QEFFBaseModel(ABC):
 
         command.append(f"-aic-binary-dir={qpc_path}")
         logger.info(f"Running compiler: {' '.join(command)}")
+        print('##############################################')
+        print(f"Running compiler: {' '.join(command)}")
 
         try:
+
             subprocess.run(command, capture_output=True, check=True)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(

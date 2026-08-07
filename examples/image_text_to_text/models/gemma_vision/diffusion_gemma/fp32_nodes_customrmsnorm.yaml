@@ -1,4 +1,7 @@
 FP32NodeInstanceNames:
  - /language_model/layers.1/Mul_output_0
  - /language_model/norm/CustomRMSNorm_output_0
+ - /language_model/Clip_output_0
+ - /language_model/layers.1/Add_output_0
+ - /language_model/layers.1/Add_2_output_0
  

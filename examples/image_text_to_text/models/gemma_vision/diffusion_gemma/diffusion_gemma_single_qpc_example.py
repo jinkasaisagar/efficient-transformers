@@ -25,11 +25,11 @@ BS = 1
 PREFILL_SEQ_LEN = 256
 CTX_LEN = 256
 GENERATION_LEN = 256
-NUM_LANG_HIDDEN_LAYER = 2
-# NUM_LANG_HIDDEN_LAYER = None
+# NUM_LANG_HIDDEN_LAYER = 2
+NUM_LANG_HIDDEN_LAYER = None
 
-EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_2layers_without3lines/onnx")
-COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_decoder_2layers_without3lines/qpc")
+EXPORT_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_full_model/onnx")
+COMPILE_ROOT = Path("/home/jsaisaga/qeff_llama/d_g_full_model/qpc")
 torch.manual_seed(42)
 # NODE_PRECISION_INFO: Optional argument.
 # - True: generate NPI automatically.
@@ -40,7 +40,7 @@ NODE_PRECISION_INFO = False
 compiler_kwargs = {
     "num_cores": 16,
     "num_devices": 4,
-    "mxfp6_matmul": False,
+    "mxfp6_matmul": True,
     # "mxint8_kv_cache": True,
     "aic_enable_depth_first": True,
     # "mos": 1,
@@ -186,7 +186,7 @@ def main():
     text_cfg = qeff_model.model.config.text_config
 
     # Match generate() path: first encoder call with fresh/empty cache.
-    pkv = qeff_model.model.get_dummy_pkv_cache(config.text_config, 1, 256)
+    pkv = qeff_model.model.get_dummy_pkv_cache(config.text_config, 1, 1024)
 
     # breakpoint()
     # enc_outputs = qeff_model.model(input_ids=inputs["input_ids"], decoder_input_ids=inputs["input_ids"],is_encode=np.ones((1,), dtype=np.int64), past_key_values=pkv)
@@ -206,21 +206,25 @@ def main():
     # breakpoint()
 
     # enc_outputs = qeff_model.model.model.encoder.language_model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True, position_ids=position_ids_ten)
-    breakpoint()
+
     self_conditioning_logits = torch.zeros((1, 256, text_cfg.vocab_size), dtype=torch.float32)
     is_encode = torch.ones((1,))
     self_condition_selector = torch.ones((2,))
-    output_model = qeff_model.model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True, position_ids=position_ids_ten, 
-                    is_encode=is_encode, self_condition_selector = self_condition_selector, decoder_input_ids = inputs["input_ids"],
-                    self_conditioning_logits=self_conditioning_logits, decoder_position_ids=position_ids_ten)
+    # import ipdb; ipdb.set_trace()
+    # output_model = qeff_model.model(input_ids=inputs["input_ids"],past_key_values=pkv,use_cache=True, position_ids=position_ids_ten, 
+    #                 is_encode=is_encode, self_condition_selector = self_condition_selector, decoder_input_ids = inputs["input_ids"],
+    #                 self_conditioning_logits=self_conditioning_logits, decoder_position_ids=position_ids_ten)
     output = qeff_model.generate(inputs=inputs,generation_len=GENERATION_LEN,qpc_path=qpc_path,)
+    breakpoint()
     model = DiffusionGemmaForBlockDiffusion.from_pretrained(MODEL_ID,dtype="float32",device_map="auto",config=config)
     output_original_model = model.generate(inputs['input_ids'], max_new_tokens=256)
-    breakpoint()
 
     mad_aic_hf = np.abs((output - output_original_model.detach().float().cpu().numpy())).max()
     mad_aic_qeff = np.abs((output - output_model[0].detach().cpu().numpy())).max()
     mad_qeff_hf = np.abs((output_model[0].detach().cpu().numpy() - output_original_model.detach().float().cpu().numpy())).max()
+    print(f'mad_aic_hf:{mad_aic_hf}')
+    print(f'mad_aic_qeff:{mad_aic_qeff}')
+    print(f'mad_qeff_hf:{mad_qeff_hf}')
     breakpoint()
 
     session = ort.InferenceSession(str(onnx_path))

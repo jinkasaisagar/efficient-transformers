@@ -1478,7 +1478,7 @@ class QEffGemma4DynamicCache(QEffDynamicCache):
                 is_sliding=cache._is_sliding_layer(layer_idx),
             )
         return cache
-
+    
     def update(
         self,
         key_states: torch.Tensor,
@@ -1508,6 +1508,50 @@ class QEffGemma4DynamicLayer(QEffDynamicLayer):
         layer._mark_initialized(key_states)
         return layer
 
+    def read_only(self, cache_kwargs):
+        if not self.is_sliding:
+            return super().read_only(cache_kwargs)
+
+        k_out, v_out = self.keys, self.values
+        if k_out is not None:
+            self._mark_initialized(k_out)
+        position_ids = cache_kwargs.get("position_ids")
+        if position_ids is None:
+            return k_out, v_out
+
+        batch_index = cache_kwargs.get("batch_index", None)
+        layer_ctx_len = k_out.shape[2]
+        ctx_len = min(layer_ctx_len, cache_kwargs.get("CCL", layer_ctx_len))
+        last_position = torch.where(
+            position_ids >= 0,
+            position_ids,
+            torch.full_like(position_ids, -1),
+        ).max(dim=1, keepdim=True).values.unsqueeze(1)
+        logical_indices = torch.arange(ctx_len, device=k_out.device)[None, None, ...]
+        first_position = torch.maximum(last_position - ctx_len + 1, torch.zeros_like(last_position))
+        logical_indices = logical_indices + first_position
+        invalid_mask = logical_indices > last_position
+
+        physical_indices = logical_indices % layer_ctx_len
+        physical_indices = torch.where(
+            last_position >= (layer_ctx_len - 1) * 2,
+            (logical_indices + 1) % layer_ctx_len,
+            physical_indices,
+        )
+        invalid_idx_value = InvalidIndexProvider._get_invalid_idx_value()
+        physical_indices = torch.where(invalid_mask, invalid_idx_value, physical_indices)
+
+        if batch_index is not None:
+            k_out = CtxGatherFuncCB.apply(k_out, batch_index, physical_indices, ctx_len)
+            v_out = CtxGatherFuncCB.apply(v_out, batch_index, physical_indices, ctx_len)
+        else:
+            k_out = CtxGatherFunc.apply(k_out, physical_indices, ctx_len)
+            v_out = CtxGatherFunc.apply(v_out, physical_indices, ctx_len)
+
+        invalid_mask = _match_invalid_mask(invalid_mask, v_out.shape[-2])
+        v_out = torch.where(invalid_mask.unsqueeze(-1), torch.tensor(0.0, dtype=torch.float32), v_out)
+        return k_out, v_out
+
     def update(
         self,
         key_states: torch.Tensor,
@@ -1521,11 +1565,6 @@ class QEffGemma4DynamicLayer(QEffDynamicLayer):
         # return super().update(key_states, value_states, cache_kwargs)
         if not self.is_sliding or cache_kwargs is None:
             return super().update(key_states, value_states, cache_kwargs)
-        if self.keys is None:
-            self.keys = key_states
-            self.values = value_states
-            self._mark_initialized(self.keys)
-            return self.keys, self.values
 
         self._mark_initialized(self.keys)
         position_ids = cache_kwargs.get("position_ids")

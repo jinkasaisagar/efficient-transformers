@@ -350,14 +350,25 @@ def _run_encoder_block(
     # encoder_inputs = {"input_ids": input_ids.cpu().numpy().astype(np.int64)}
     input_names = set(getattr(encoder_session, "input_names", []))
     print(input_names)
-    
+    self_condition_selector = torch.ones((3,)).detach().cpu().numpy()
+    self_conditioning_logits = torch.zeros((1, 256, 262144), dtype=torch.float32).detach().cpu().numpy()
+    # is_encode=is_encode, self_condition_selector = self_condition_selector, decoder_input_ids = inputs["input_ids"],
+    #                     self_conditioning_logits=self_conditioning_logits, decoder_position_ids=position_ids_ten
+    # import ipdb; ipdb.set_trace()
     if "is_encode" in input_names:
         encoder_inputs["is_encode"] = np.ones((1,), dtype=np.int64)
     # if attention_mask is not None and "attention_mask" in input_names:
     #     encoder_inputs["attention_mask"] = attention_mask.cpu().numpy().astype(np.int64)
     encoder_inputs["position_ids"] = np.arange(0,256).reshape(1,-1)
+    encoder_inputs["self_condition_selector"] = self_condition_selector.astype(np.int64)
+    encoder_inputs["decoder_input_ids"] = input_ids
+    encoder_inputs["self_conditioning_logits"] = self_conditioning_logits
+    encoder_inputs["decoder_position_ids"] = np.arange(0,256).reshape(1,-1)
+
+    encoder_session.set_buffers({"hidden_states": np.zeros((1, 256, 2816), dtype=np.float32)})
+
     encoder_outputs = encoder_session.run(encoder_inputs)
-    breakpoint()
+    # import ipdb; ipdb.set_trace()
     return encoder_outputs['hidden_states']#, _collect_kv_cache_from_outputs(encoder_outputs)
 
 

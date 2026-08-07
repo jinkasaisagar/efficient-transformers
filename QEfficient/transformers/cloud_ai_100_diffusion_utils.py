@@ -132,6 +132,7 @@ def _run_decoder_denoising_loop(
     if stopper is not None:
         stopper.reset()
     initial_decode_iter = True
+    max_denoising_steps = 10
     for cur_step in reversed(range(1, max_denoising_steps + 1)):
         print(f'Current step of decoder is {cur_step}')
         decoder_forward_passes += (~(finished_denoising | finished_sequences)).to(torch.int64)
@@ -250,7 +251,7 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
             input_ids=encoder_input_ids,
             attention_mask=encoder_attention_mask,
         )
-        return hidden_states
+        # return hidden_states
         is_prefill = False
 
         current_canvas, self_conditioning_logits = _prepare_denoiser_inputs(
@@ -276,7 +277,7 @@ def _cloud_ai_100_diffusion_generate_single_qpc(
         )
         # decoder_attention_mask = encoder_mask_np
 
-        max_denoising_steps = 10
+        # max_denoising_steps = 10
         denoised_canvas = _run_decoder_denoising_loop(
         # decoder_hidden_states = _run_decoder_denoising_loop(
             qpc_session=qpc_session,
