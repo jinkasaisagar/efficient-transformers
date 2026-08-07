@@ -72,7 +72,7 @@ from QEfficient.transformers.quantizers.quant_transforms import (
     GPTQToMatmulNbitsTransform,
     Mxfp4GptOssExpertDequantizeTransform,
 )
-from QEfficient.transformers.cloud_ai_100_diffusion_utils import cloud_ai_100_diffusion_generate_dispatch
+from QEfficient.transformers.cloud_ai_100_diffusion_single_qpc_utils import diffusion_gemma_generate_single_qpc
 from QEfficient.transformers.diffusion_gemma_utils import diffusion_gemma_generate_dispatch
 from QEfficient.utils import (
     apply_kv_cache_prefix,
@@ -2968,12 +2968,12 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
             raise NotImplementedError("PyTorch execution is not supported yet for this model!")
 
         if _is_diffusion_gemma_arch(self.model.config):
-            qpc_path = kwargs.pop("qpc_path", None)
-            return self.cloud_ai_100_diffusion_generate(
+            return self.diffusion_gemma_generate_singleqpc(
                 inputs=inputs,
                 device_ids=device_ids,
                 runtime_ai100=runtime_ai100,
-                qpc_path=qpc_path,
+                generation_len=generation_len,
+                qpc_path=kwargs.pop("qpc_path", None),
                 **kwargs,
             )
 
@@ -2981,6 +2981,43 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
 
         return self.cloud_ai_100_generate(
             inputs=inputs, device_ids=device_ids, generation_len=generation_len, streamer=streamer
+        )
+
+    def diffusion_gemma_generate_singleqpc(
+        self,
+        inputs: Optional[torch.Tensor],
+        device_ids: Optional[List[int]] = None,
+        runtime_ai100: bool = True,
+        generation_len: Optional[int] = None,
+        qpc_path: Optional[Union[str, Path]] = None,
+        **kwargs,
+    ):
+        if not runtime_ai100:
+            raise NotImplementedError("PyTorch execution is not supported for DiffusionGemma single-QPC generation.")
+        if not _is_diffusion_gemma_arch(self.model.config):
+            raise ValueError("`diffusion_gemma_generate_singleqpc` only supports DiffusionGemma models.")
+        if inputs is None or "input_ids" not in inputs:
+            raise ValueError("`inputs` must contain `input_ids`.")
+
+        qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else (qpc_path or self.qpc_path)
+        if qpc_path is None:
+            raise ValueError("Compile the model first or pass `qpc_path`.")
+
+        generation_config = getattr(self.model, "generation_config", None)
+        pad_token_id = kwargs.pop("pad_token_id", getattr(generation_config, "pad_token_id", None))
+        eos_token_id = kwargs.pop("eos_token_id", getattr(generation_config, "eos_token_id", None))
+        if pad_token_id is None:
+            pad_token_id = 0
+
+        session = QAICInferenceSession(str(qpc_path), device_ids or None)
+        return diffusion_gemma_generate_single_qpc(
+            model_config=self.model.config,
+            inputs=inputs,
+            session=session,
+            generation_len=generation_len,
+            pad_token_id=pad_token_id,
+            eos_token_id=eos_token_id,
+            **kwargs,
         )
 
     def cloud_ai_100_diffusion_generate(
@@ -2991,16 +3028,13 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
         qpc_path: Optional[Union[str, Path]] = None,
         **kwargs,
     ):
-        qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else (qpc_path or self.qpc_path)
-        dispatch = cloud_ai_100_diffusion_generate_dispatch(
-            model=self.model,
+        return self.diffusion_gemma_generate_singleqpc(
             inputs=inputs,
+            device_ids=device_ids,
             runtime_ai100=runtime_ai100,
-            device_id=device_ids,
             qpc_path=qpc_path,
             **kwargs,
         )
-        return dispatch.runtime_result if runtime_ai100 else dispatch.hf_output
 
     def cloud_ai_100_generate(
         self,
