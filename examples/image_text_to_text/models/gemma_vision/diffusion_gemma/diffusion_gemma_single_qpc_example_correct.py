@@ -14,6 +14,7 @@ from diffusion_gemma_single_qpc_example_utils import (
     build_step_callback,
     clean_diffusion_text,
     compile_unified_qpc,
+    diffusion_gemma_generate_single_qpc_chunked,
     load_model_and_processor,
     prepare_prompt_inputs,
 )
@@ -82,7 +83,10 @@ def main():
         text_only=args.text_only,
         image_url=IMAGE_URL,
     )
-    result = qeff_model.diffusion_gemma_generate_singleqpc(
+    print(f'Canvas length is {CANVAS_LENGTH} and input ids is of size {inputs['input_ids'].shape[1]}')
+    breakpoint()
+    result = diffusion_gemma_generate_single_qpc_chunked(
+        qeff_model=qeff_model,
         inputs=inputs,
         generation_len=args.max_new_tokens,
         qpc_path=qpc_path,

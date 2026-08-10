@@ -481,23 +481,13 @@ class QEffDiffusionGemmaDecoderTextAttention(DiffusionGemmaDecoderTextAttention)
         value_states = value_states.transpose(1, 2)
 
         if past_key_values is not None:
-            # Read encoder KV cache without updating it (bidirectional cross-attend)
             # encoder_key_states, encoder_value_states = past_key_values.read_only(
-            #             self.layer_idx,
-            #             cache_kwargs={"position_ids": encoder_cache_position_ids},
-            #         )
+            #     self.layer_idx,
+            #     cache_kwargs={"position_ids": encoder_cache_position_ids},
+            # )
             layer = past_key_values.layers[self.layer_idx]
             encoder_key_states = layer.keys
             encoder_value_states = layer.values
-            # if encoder_cache_position_ids is not None and hasattr(past_key_values, "read_only"):
-            #     encoder_key_states, encoder_value_states = past_key_values.read_only(
-            #         self.layer_idx,
-            #         cache_kwargs={"position_ids": encoder_cache_position_ids},
-            #     )
-            # else:
-            #     layer = past_key_values.layers[self.layer_idx]
-            #     encoder_key_states = layer.keys
-            #     encoder_value_states = layer.values
             key_states = torch.cat([encoder_key_states, key_states], dim=2)
             value_states = torch.cat([encoder_value_states, value_states], dim=2)
 
@@ -769,8 +759,8 @@ class QEffDiffusionGemmaDecoderModel(DiffusionGemmaDecoderModel):
         # Gather on the key tensor), which the compiler resolves to sliding_window
         # vs ctx_len correctly per specialization.
         #
-        # Cache read_only() gathers each layer's valid encoder KV. Build a matching
-        # fixed-width mask from the latest encoder position.
+        # Keep encoder K/V in physical cache order and mask unused fixed-width slots.
+        # Sliding-cache wraparound permutes K/V together, which leaves attention unchanged.
         mask_mapping = {}
         for layer_type in self.unique_layer_types:
             rep_layer_key = None

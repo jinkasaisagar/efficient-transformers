@@ -19,6 +19,11 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from QEfficient import QEFFAutoModelForImageTextToText
 from QEfficient.base.modeling_qeff import QEFFBaseModel
+from QEfficient.generation.cloud_infer import QAICInferenceSession
+from QEfficient.transformers.cloud_ai_100_diffusion_single_qpc_utils import (
+    DiffusionGemmaSingleQPCGenerator,
+    _to_numpy,
+)
 from QEfficient.transformers.models.modeling_auto import QEffCausalLMForTextImageToTextModel
 
 
@@ -39,6 +44,136 @@ class UnifiedQPC(QEffCausalLMForTextImageToTextModel):
 
     def export(self, inputs, output_names, dynamic_axes, **kwargs):
         return self._export(inputs, output_names=output_names, dynamic_axes=dynamic_axes)
+
+
+class ExampleChunkedDiffusionGemmaSingleQPCGenerator(DiffusionGemmaSingleQPCGenerator):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.prefill_seq_len != self.canvas_length:
+            raise ValueError(
+                "The example requires the compiled encoder prefill length to match the canvas length."
+            )
+        self._prompt_chunks = []
+        self._prompt_pad_token_id = 0
+
+    def _prepare_prompt(self, inputs, pad_token_id: int):
+        input_ids = _to_numpy(inputs["input_ids"], np.int64)
+        if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+            raise ValueError("`input_ids` must have shape [1, sequence_length].")
+
+        attention_mask = inputs.get("attention_mask")
+        if attention_mask is not None:
+            attention_mask = _to_numpy(attention_mask, np.int64)
+            sequence_length = int(attention_mask[0].sum())
+        else:
+            sequence_length = int(input_ids.shape[1])
+        if sequence_length <= 0:
+            raise ValueError("The prompt must contain at least one token.")
+
+        input_ids = input_ids[:, :sequence_length]
+        position_ids = inputs.get("position_ids")
+        if position_ids is None:
+            position_ids = np.arange(sequence_length, dtype=np.int64).reshape(1, -1)
+        else:
+            position_ids = _to_numpy(position_ids, np.int64)[:, :sequence_length]
+
+        mm_token_type_ids = inputs.get("mm_token_type_ids")
+        if mm_token_type_ids is None:
+            mm_token_type_ids = np.zeros_like(input_ids)
+        else:
+            mm_token_type_ids = _to_numpy(mm_token_type_ids, np.int64)[:, :sequence_length]
+
+        self._prompt_chunks = []
+        for start in range(0, sequence_length, self.canvas_length):
+            end = min(start + self.canvas_length, sequence_length)
+            chunk = {
+                "input_ids": input_ids[:, start:end],
+                "attention_mask": np.ones((1, end - start), dtype=np.int64),
+                "position_ids": position_ids[:, start:end],
+                "mm_token_type_ids": mm_token_type_ids[:, start:end],
+            }
+            if inputs.get("vision_embeds") is not None:
+                chunk["vision_embeds"] = inputs["vision_embeds"]
+            self._prompt_chunks.append(chunk)
+
+        self._prompt_pad_token_id = int(pad_token_id)
+        initial_image_idx = inputs.get("image_idx")
+        if initial_image_idx is None:
+            initial_image_idx = np.zeros((1, 1), dtype=np.int64)
+        self._load_prompt_chunk(0, initial_image_idx)
+        return sequence_length
+
+    def _load_prompt_chunk(self, chunk_index: int, image_idx):
+        chunk_inputs = dict(self._prompt_chunks[chunk_index])
+        chunk_inputs["image_idx"] = image_idx
+        super()._prepare_prompt(chunk_inputs, pad_token_id=self._prompt_pad_token_id)
+
+    def prefill(self):
+        retained_buffers = [
+            name
+            for name in self.session.input_names + self.session.output_names
+            if name.startswith("past_")
+        ]
+        retained_kv_count = 0
+        start = time.perf_counter()
+
+        for chunk_index in range(len(self._prompt_chunks)):
+            if chunk_index > 0:
+                self._load_prompt_chunk(chunk_index, self.image_idx)
+
+            canvas_start = self._next_encoder_position()
+            feed = {
+                **self._base_feed(),
+                "decoder_input_ids": np.zeros((1, self.canvas_length), dtype=np.int64),
+                "decoder_position_ids": np.arange(
+                    canvas_start, canvas_start + self.canvas_length, dtype=np.int64
+                ).reshape(1, -1),
+                "self_conditioning_logits": np.zeros(
+                    (1, self.canvas_length, self.vocab_size), dtype=np.float32
+                ),
+                "is_encode": np.ones((1,), dtype=np.int64),
+                "use_self_conditioning": np.zeros((1,), dtype=np.int64),
+            }
+            outputs = self.session.run(
+                {name: value for name, value in feed.items() if name in self.session.input_names}
+            )
+            if "image_idx_output" in outputs:
+                self.image_idx = _to_numpy(outputs["image_idx_output"], np.int64)
+            if chunk_index == 0:
+                retained_kv_count = len([name for name in outputs if name.startswith("past_")])
+                self.session.skip_buffers(retained_buffers)
+
+        return time.perf_counter() - start, retained_kv_count
+
+
+def diffusion_gemma_generate_single_qpc_chunked(
+    *,
+    qeff_model,
+    inputs,
+    generation_len: int,
+    qpc_path,
+    device_ids=None,
+    **kwargs,
+):
+    generation_config = getattr(qeff_model.model, "generation_config", None)
+    pad_token_id = kwargs.pop("pad_token_id", getattr(generation_config, "pad_token_id", None))
+    eos_token_id = kwargs.pop("eos_token_id", getattr(generation_config, "eos_token_id", None))
+    if pad_token_id is None:
+        pad_token_id = 0
+
+    session = QAICInferenceSession(str(qpc_path), device_ids or None)
+    generator = ExampleChunkedDiffusionGemmaSingleQPCGenerator(
+        model_config=qeff_model.model.config,
+        session=session,
+        seed=kwargs.pop("seed", 1234),
+    )
+    return generator.generate(
+        inputs=inputs,
+        generation_len=generation_len,
+        pad_token_id=pad_token_id,
+        eos_token_id=eos_token_id,
+        **kwargs,
+    )
 
 
 def load_model_and_processor(model_id: str, canvas_length: int):

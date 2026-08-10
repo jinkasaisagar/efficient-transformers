@@ -130,7 +130,6 @@ class DiffusionGemmaSingleQPCGenerator:
         self.input_ids = np.pad(input_ids, ((0, 0), (0, padding)), constant_values=self.pad_token_id)
         self.position_ids = np.pad(position_ids, ((0, 0), (0, padding)), constant_values=-1)
         self.mm_token_type_ids = np.pad(mm_token_type_ids, ((0, 0), (0, padding)))
-
         vision_dims = _binding_dims(self.session, "vision_embeds")
         if vision_dims is not None:
             self.vision_embeds = np.zeros(vision_dims, dtype=np.float16)

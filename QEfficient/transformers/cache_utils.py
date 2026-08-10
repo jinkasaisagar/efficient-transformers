@@ -1549,7 +1549,8 @@ class QEffGemma4DynamicLayer(QEffDynamicLayer):
             v_out = CtxGatherFunc.apply(v_out, physical_indices, ctx_len)
 
         invalid_mask = _match_invalid_mask(invalid_mask, v_out.shape[-2])
-        v_out = torch.where(invalid_mask.unsqueeze(-1), torch.tensor(0.0, dtype=torch.float32), v_out)
+        k_out = torch.where(invalid_mask.unsqueeze(-1), torch.zeros_like(k_out), k_out)
+        v_out = torch.where(invalid_mask.unsqueeze(-1), torch.zeros_like(v_out), v_out)
         return k_out, v_out
 
     def update(
