@@ -79,7 +79,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=1234, help="Use -1 for an unseeded sampler.")
     parser.add_argument("--ctx-len", type=int, default=CTX_LEN, help="Compiled retained-KV context length.")
     parser.add_argument("--canvas-length", type=int, default=CANVAS_LENGTH, help="Tokens per denoising canvas.")
-    parser.add_argument("--max-new-tokens", type=int, default=CANVAS_LENGTH, help="Total generated tokens.")
+    parser.add_argument("--max-new-tokens", type=int, default=768, help="Total generated tokens.")
     parser.add_argument("--diffusion-steps", type=int, default=DIFFUSION_STEPS, help="Steps per canvas.")
     parser.add_argument(
         "--num-layers",
