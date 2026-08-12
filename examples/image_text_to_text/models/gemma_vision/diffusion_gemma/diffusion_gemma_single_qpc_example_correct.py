@@ -10,12 +10,15 @@
 import argparse
 import os
 
+from transformers import AutoConfig, AutoProcessor
+
+from QEfficient import QEFFAutoModelForImageTextToText
+
 from diffusion_gemma_single_qpc_example_utils import (
     build_step_callback,
     clean_diffusion_text,
     compile_unified_qpc,
     diffusion_gemma_generate_single_qpc_chunked,
-    load_model_and_processor,
     prepare_prompt_inputs,
 )
 
@@ -33,8 +36,40 @@ IMAGE_URL = (
 IMAGE_PROMPT = "Describe this image in detail."
 TEXT_PROMPT = "What is the capital city of France? Answer in one sentence."
 TEXT_PROMPT = "What are the seven continents? Answer in one sentence."
+TEXT_PROMPT = "What is diffusion based generative learning?"
 TEXT_PROMPT = "How to make pizza? Answer in one sentence."
 TEXT_PROMPT = "What is diffusion based generative learning? Answer in one sentence."
+
+
+def _apply_reduced_layer_config(config, num_lang_layers: int):
+    if hasattr(config, "text_config") and hasattr(config.text_config, "num_hidden_layers"):
+        config.text_config.num_hidden_layers = num_lang_layers
+    if hasattr(config, "num_hidden_layers"):
+        config.num_hidden_layers = num_lang_layers
+    if (
+        hasattr(config, "text_config")
+        and hasattr(config.text_config, "layer_types")
+        and config.text_config.layer_types
+    ):
+        config.text_config.layer_types = config.text_config.layer_types[:num_lang_layers]
+    return config
+
+
+def load_model_and_processor(model_id: str, canvas_length: int, num_lang_layers: int = None):
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    if num_lang_layers is not None:
+        config = _apply_reduced_layer_config(config, num_lang_layers=num_lang_layers)
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    qeff_model = QEFFAutoModelForImageTextToText.from_pretrained(
+        model_id,
+        config=config,
+        trust_remote_code=True,
+        dtype="float32",
+        kv_offload=False,
+        ignore_mismatched_sizes=num_lang_layers is not None,
+    )
+    qeff_model.model.config.canvas_length = canvas_length
+    return processor, qeff_model
 
 
 def parse_args():
@@ -46,6 +81,12 @@ def parse_args():
     parser.add_argument("--canvas-length", type=int, default=CANVAS_LENGTH, help="Tokens per denoising canvas.")
     parser.add_argument("--max-new-tokens", type=int, default=CANVAS_LENGTH, help="Total generated tokens.")
     parser.add_argument("--diffusion-steps", type=int, default=DIFFUSION_STEPS, help="Steps per canvas.")
+    parser.add_argument(
+        "--num-layers",
+        type=int,
+        default=None,
+        help="Use a reduced number of language layers; defaults to the full model.",
+    )
     parser.add_argument(
         "--sampler",
         choices=("local", "hf"),
@@ -62,9 +103,18 @@ def main():
     args = parse_args()
     if args.canvas_length <= 0 or args.max_new_tokens <= 0:
         raise ValueError("Canvas length and max new tokens must be positive.")
+    if args.num_layers is not None and args.num_layers <= 0:
+        raise ValueError("Number of layers must be positive.")
 
     device_ids = [int(device_id) for device_id in os.environ.get("DG", "4,5,6,7").split(",")]
-    processor, qeff_model = load_model_and_processor(MODEL_ID, args.canvas_length)
+    processor, qeff_model = load_model_and_processor(
+        MODEL_ID,
+        args.canvas_length,
+        num_lang_layers=args.num_layers,
+    )
+    print(
+        f"Compiling a {qeff_model.model.config.text_config.num_hidden_layers}-layer DiffusionGemma model."
+    )
     qpc_path = compile_unified_qpc(
         qeff_model.model,
         prefill_seq_len=args.canvas_length,
