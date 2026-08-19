@@ -30,6 +30,11 @@ from QEfficient.transformers.models.modeling_auto import QEffCausalLMForTextImag
 FP32_ACCUM_OPS = {"CustomRMSNorm", "Clip", "Softmax", "Add", "Sub", "Mul", "Div", "Tanh", "Pow", "ReduceMean"}
 
 
+def _session_feed(session: QAICInferenceSession, feed):
+    input_names = set(session.input_names)
+    return {name: value for name, value in feed.items() if name in input_names}
+
+
 class UnifiedQPC(QEffCausalLMForTextImageToTextModel):
     def __init__(self, model):
         QEFFBaseModel.__init__(self, model)
@@ -47,39 +52,88 @@ class UnifiedQPC(QEffCausalLMForTextImageToTextModel):
 
 
 class ExampleChunkedDiffusionGemmaSingleQPCGenerator(DiffusionGemmaSingleQPCGenerator):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        if self.prefill_seq_len != self.canvas_length:
-            raise ValueError(
-                "The example requires the compiled encoder prefill length to match the canvas length."
-            )
+    """Host driver for the shared-path unified DiffusionGemma QPC."""
+
+    _MASK_VALUE = -1e4
+
+    def __init__(self, *, model_config, session: QAICInferenceSession, seed: int = 1234):
+        self.model_config = model_config
+        self.session = session
+        self.rng = np.random.RandomState(seed) if seed is not None and seed >= 0 else np.random.RandomState()
+
+        input_dims = self._binding_dims("input_ids")
+        if input_dims is None or int(input_dims[0]) != 1:
+            raise ValueError("The shared DiffusionGemma QPC requires a batch-1 `input_ids` binding.")
+        self.prefill_seq_len = int(input_dims[1])
+        self.canvas_length = self.prefill_seq_len
+        self.vocab_size = int(model_config.text_config.vocab_size)
+        self.full_cache_length = self._cache_length("full_attention")
+        self.sliding_cache_length = self._cache_length("sliding_attention")
+        self.position_ids = None
+        self.input_ids = None
+        self.mm_token_type_ids = None
+        self.vision_embeds = None
+        self.image_idx = None
+        self.pad_token_id = 0
         self._prompt_chunks = []
         self._prompt_pad_token_id = 0
+        self._retained_last_position = -1
+
+    def _binding_dims(self, name):
+        for binding in self.session.bindings:
+            if binding.name == name:
+                return binding.dims
+        return None
+
+    def _cache_length(self, layer_type: str) -> int:
+        layer_types = getattr(self.model_config.text_config, "layer_types", ())
+        layer_index = next(
+            (index for index, value in enumerate(layer_types) if value == layer_type),
+            0,
+        )
+        dims = self._binding_dims(f"past_key.{layer_index}")
+        if dims is None:
+            raise ValueError(f"The QPC is missing `past_key.{layer_index}` for {layer_type}.")
+        return int(dims[2])
+
+    def _next_encoder_position(self) -> int:
+        valid_positions = self.position_ids[self.position_ids >= 0]
+        return int(valid_positions.max()) + 1 if valid_positions.size else 0
+
+    def _load_prompt_chunk(self, chunk_index: int, image_idx):
+        chunk = self._prompt_chunks[chunk_index]
+        block_length = chunk["input_ids"].shape[1]
+        padding = self.prefill_seq_len - block_length
+        self.input_ids = np.pad(
+            chunk["input_ids"], ((0, 0), (0, padding)), constant_values=self._prompt_pad_token_id
+        )
+        self.position_ids = np.pad(chunk["position_ids"], ((0, 0), (0, padding)), constant_values=-1)
+        self.mm_token_type_ids = np.pad(chunk["mm_token_type_ids"], ((0, 0), (0, padding)))
+        vision_dims = self._binding_dims("vision_embeds")
+        if vision_dims is not None:
+            self.vision_embeds = np.zeros(vision_dims, dtype=np.float16)
+            if chunk.get("vision_embeds") is not None:
+                vision_embeds = _to_numpy(chunk["vision_embeds"], np.float16)
+                self.vision_embeds[:, : vision_embeds.shape[1], :] = vision_embeds
+        self.image_idx = _to_numpy(image_idx, np.int64)
 
     def _prepare_prompt(self, inputs, pad_token_id: int):
         input_ids = _to_numpy(inputs["input_ids"], np.int64)
         if input_ids.ndim != 2 or input_ids.shape[0] != 1:
             raise ValueError("`input_ids` must have shape [1, sequence_length].")
-
         attention_mask = inputs.get("attention_mask")
-        if attention_mask is not None:
-            attention_mask = _to_numpy(attention_mask, np.int64)
-            sequence_length = int(attention_mask[0].sum())
-        else:
-            sequence_length = int(input_ids.shape[1])
+        sequence_length = int(_to_numpy(attention_mask, np.int64)[0].sum()) if attention_mask is not None else input_ids.shape[1]
         if sequence_length <= 0:
             raise ValueError("The prompt must contain at least one token.")
 
-        input_ids = input_ids[:, :sequence_length]
         position_ids = inputs.get("position_ids")
         if position_ids is None:
             position_ids = np.arange(sequence_length, dtype=np.int64).reshape(1, -1)
         else:
             position_ids = _to_numpy(position_ids, np.int64)[:, :sequence_length]
-
         mm_token_type_ids = inputs.get("mm_token_type_ids")
         if mm_token_type_ids is None:
-            mm_token_type_ids = np.zeros_like(input_ids)
+            mm_token_type_ids = np.zeros_like(input_ids[:, :sequence_length])
         else:
             mm_token_type_ids = _to_numpy(mm_token_type_ids, np.int64)[:, :sequence_length]
 
@@ -88,7 +142,6 @@ class ExampleChunkedDiffusionGemmaSingleQPCGenerator(DiffusionGemmaSingleQPCGene
             end = min(start + self.canvas_length, sequence_length)
             chunk = {
                 "input_ids": input_ids[:, start:end],
-                "attention_mask": np.ones((1, end - start), dtype=np.int64),
                 "position_ids": position_ids[:, start:end],
                 "mm_token_type_ids": mm_token_type_ids[:, start:end],
             }
@@ -103,47 +156,215 @@ class ExampleChunkedDiffusionGemmaSingleQPCGenerator(DiffusionGemmaSingleQPCGene
         self._load_prompt_chunk(0, initial_image_idx)
         return sequence_length
 
-    def _load_prompt_chunk(self, chunk_index: int, image_idx):
-        chunk_inputs = dict(self._prompt_chunks[chunk_index])
-        chunk_inputs["image_idx"] = image_idx
-        super()._prepare_prompt(chunk_inputs, pad_token_id=self._prompt_pad_token_id)
+    @staticmethod
+    def _physical_cache_index(position: int, cache_length: int, sliding: bool) -> int:
+        if not sliding:
+            return position
+        if position >= (cache_length - 1) * 2:
+            return (position + 1) % cache_length
+        return position % cache_length
+
+    def _build_additive_mask(self, *, cache_length: int, sliding: bool, cache_position_ids, is_encode: bool):
+        block_length = self.prefill_seq_len
+        mask = np.full((1, 1, block_length, cache_length + block_length), self._MASK_VALUE, dtype=np.float32)
+        current_positions = self.position_ids[0]
+        cache_positions = cache_position_ids[0]
+        valid_history_end = self._retained_last_position
+        if is_encode:
+            valid_history_end = max(valid_history_end, int(cache_positions.max(initial=-1)))
+
+        for query_index, query_position in enumerate(current_positions):
+            if query_position < 0:
+                continue
+            if is_encode:
+                first_visible = max(0, query_position - cache_length + 1) if sliding else 0
+                last_visible = query_position
+            else:
+                first_visible = max(0, valid_history_end - cache_length + 1) if sliding else 0
+                last_visible = valid_history_end
+            for logical_position in range(first_visible, last_visible + 1):
+                if logical_position >= cache_length and not sliding:
+                    continue
+                physical_index = self._physical_cache_index(logical_position, cache_length, sliding)
+                mask[0, 0, query_index, physical_index] = 0.0
+
+        if is_encode:
+            vision = (self.mm_token_type_ids[0] == 1) | (self.mm_token_type_ids[0] == 2)
+            group_ids = np.full(block_length, -1, dtype=np.int64)
+            group = -1
+            previous = False
+            for index, is_vision in enumerate(vision):
+                if is_vision and not previous:
+                    group += 1
+                if is_vision:
+                    group_ids[index] = group
+                previous = bool(is_vision)
+            for query_index, group_id in enumerate(group_ids):
+                if group_id < 0 or current_positions[query_index] < 0:
+                    continue
+                for key_index, key_group_id in enumerate(group_ids):
+                    if key_group_id != group_id or cache_positions[key_index] < 0:
+                        continue
+                    physical_index = self._physical_cache_index(
+                        int(cache_positions[key_index]), cache_length, sliding
+                    )
+                    mask[0, 0, query_index, physical_index] = 0.0
+        else:
+            mask[:, :, :, cache_length:] = 0.0
+        return mask
+
+    def _shared_feed(self, *, cache_position_ids, is_encode, self_conditioning_logits, use_self_conditioning):
+        cache_position_ids = np.asarray(cache_position_ids, dtype=np.int64)
+        return {
+            "input_ids": self.input_ids,
+            "position_ids": self.position_ids,
+            "cache_position_ids": cache_position_ids,
+            "full_attention_mask": self._build_additive_mask(
+                cache_length=self.full_cache_length,
+                sliding=False,
+                cache_position_ids=cache_position_ids,
+                is_encode=is_encode,
+            ),
+            "sliding_attention_mask": self._build_additive_mask(
+                cache_length=self.sliding_cache_length,
+                sliding=True,
+                cache_position_ids=cache_position_ids,
+                is_encode=is_encode,
+            ),
+            "vision_embeds": self.vision_embeds,
+            "image_idx": self.image_idx,
+            "mm_token_type_ids": self.mm_token_type_ids,
+            "self_conditioning_logits": self_conditioning_logits,
+            "is_encode": np.array([is_encode], dtype=np.int64),
+            "use_self_conditioning": np.array([use_self_conditioning], dtype=np.int64),
+        }
 
     def prefill(self):
         retained_buffers = [
-            name
-            for name in self.session.input_names + self.session.output_names
-            if name.startswith("past_")
+            name for name in self.session.input_names + self.session.output_names if name.startswith("past_")
         ]
         retained_kv_count = 0
         start = time.perf_counter()
-
         for chunk_index in range(len(self._prompt_chunks)):
             if chunk_index > 0:
                 self._load_prompt_chunk(chunk_index, self.image_idx)
-
-            canvas_start = self._next_encoder_position()
-            feed = {
-                **self._base_feed(),
-                "decoder_input_ids": np.zeros((1, self.canvas_length), dtype=np.int64),
-                "decoder_position_ids": np.arange(
-                    canvas_start, canvas_start + self.canvas_length, dtype=np.int64
-                ).reshape(1, -1),
-                "self_conditioning_logits": np.zeros(
-                    (1, self.canvas_length, self.vocab_size), dtype=np.float32
-                ),
-                "is_encode": np.ones((1,), dtype=np.int64),
-                "use_self_conditioning": np.zeros((1,), dtype=np.int64),
-            }
-            outputs = self.session.run(
-                {name: value for name, value in feed.items() if name in self.session.input_names}
+            feed = self._shared_feed(
+                cache_position_ids=self.position_ids,
+                is_encode=True,
+                self_conditioning_logits=np.zeros((1, self.canvas_length, self.vocab_size), dtype=np.float32),
+                use_self_conditioning=False,
             )
+            outputs = self.session.run(_session_feed(self.session, feed))
             if "image_idx_output" in outputs:
                 self.image_idx = _to_numpy(outputs["image_idx_output"], np.int64)
+            self._retained_last_position = max(self._retained_last_position, int(self.position_ids.max()))
             if chunk_index == 0:
                 retained_kv_count = len([name for name in outputs if name.startswith("past_")])
                 self.session.skip_buffers(retained_buffers)
-
         return time.perf_counter() - start, retained_kv_count
+
+    def _denoise_canvas(
+        self,
+        *,
+        block_index: int,
+        max_denoising_steps: int,
+        sampler: str,
+        entropy_bound: float,
+        t_min: float,
+        t_max: float,
+        step_callback,
+    ):
+        canvas_start = self._next_encoder_position()
+        canvas = self.rng.randint(0, self.vocab_size, size=(1, self.canvas_length)).astype(np.int64)
+        self.input_ids = canvas
+        self.position_ids = np.arange(canvas_start, canvas_start + self.canvas_length, dtype=np.int64).reshape(1, -1)
+        self.mm_token_type_ids = np.zeros_like(canvas)
+        self._retained_last_position = canvas_start - 1
+        new_canvas = canvas.copy()
+        accepted_mask = np.zeros((1, self.canvas_length), dtype=bool)
+        self_conditioning_logits = np.zeros((1, self.canvas_length, self.vocab_size), dtype=np.float32)
+        no_cache_write = np.full((1, self.canvas_length), -1, dtype=np.int64)
+
+        start = time.perf_counter()
+        for step in range(max_denoising_steps):
+            current_step = max_denoising_steps - step
+            temperature = t_min + (t_max - t_min) * current_step / max_denoising_steps
+            self.input_ids = canvas
+            outputs = self.session.run(
+                _session_feed(
+                    self.session,
+                    self._shared_feed(
+                        cache_position_ids=no_cache_write,
+                        is_encode=False,
+                        self_conditioning_logits=self_conditioning_logits,
+                        use_self_conditioning=step > 0,
+                    ),
+                )
+            )
+            canvas_logits = outputs["canvas_logits"].astype(np.float32)
+            self_conditioning_logits = canvas_logits
+            temperature_logits = canvas_logits / max(temperature, 1e-6)
+            uniform = self.rng.uniform(size=temperature_logits.shape).astype(np.float32)
+            gumbel = -np.log(-np.log(uniform + 1e-20) + 1e-20)
+            denoiser_canvas = (temperature_logits + gumbel).argmax(-1).astype(np.int64)
+
+            shifted_logits = temperature_logits - temperature_logits.max(-1, keepdims=True)
+            log_softmax = shifted_logits - np.log(np.exp(shifted_logits).sum(-1, keepdims=True))
+            entropy = -(np.exp(log_softmax) * log_softmax).sum(-1)[0]
+            entropy_order = np.argsort(entropy)
+            selected = (np.cumsum(entropy[entropy_order]) - entropy[entropy_order]) <= entropy_bound
+            newly_accepted = np.zeros(self.canvas_length, dtype=bool)
+            newly_accepted[entropy_order[selected]] = True
+            new_canvas = np.where(newly_accepted[None, :], denoiser_canvas, canvas)
+            accepted_mask = accepted_mask | newly_accepted[None, :] if sampler == "local" else newly_accepted[None, :]
+            canvas = np.where(
+                ~accepted_mask,
+                self.rng.randint(0, self.vocab_size, size=(1, self.canvas_length)).astype(np.int64),
+                new_canvas,
+            )
+
+            accepted_count = int(accepted_mask.sum())
+            if step_callback is not None:
+                step_callback(
+                    {
+                        "block_index": block_index,
+                        "step": step,
+                        "temperature": temperature,
+                        "accepted_count": accepted_count,
+                        "canvas_length": self.canvas_length,
+                        "tokens": new_canvas,
+                    }
+                )
+            if accepted_count >= self.canvas_length:
+                break
+        return new_canvas, step + 1, time.perf_counter() - start, int(accepted_mask.sum())
+
+    def _commit_canvas(self, tokens: np.ndarray):
+        commit_length = int(tokens.shape[1])
+        if commit_length > self.prefill_seq_len:
+            raise ValueError(
+                f"Commit length {commit_length} exceeds compiled block length {self.prefill_seq_len}."
+            )
+        commit_start = self._next_encoder_position()
+        self.input_ids = np.full((1, self.prefill_seq_len), self.pad_token_id, dtype=np.int64)
+        self.input_ids[:, :commit_length] = tokens
+        self.position_ids = np.full((1, self.prefill_seq_len), -1, dtype=np.int64)
+        self.position_ids[:, :commit_length] = np.arange(commit_start, commit_start + commit_length, dtype=np.int64)
+        self.mm_token_type_ids = np.zeros((1, self.prefill_seq_len), dtype=np.int64)
+        outputs = self.session.run(
+            _session_feed(
+                self.session,
+                self._shared_feed(
+                    cache_position_ids=self.position_ids,
+                    is_encode=True,
+                    self_conditioning_logits=np.zeros((1, self.canvas_length, self.vocab_size), dtype=np.float32),
+                    use_self_conditioning=False,
+                ),
+            )
+        )
+        if "image_idx_output" in outputs:
+            self.image_idx = _to_numpy(outputs["image_idx_output"], np.int64)
+        self._retained_last_position = commit_start + commit_length - 1
 
 
 def diffusion_gemma_generate_single_qpc_chunked(

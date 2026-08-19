@@ -37,8 +37,8 @@ IMAGE_PROMPT = "Describe this image in detail."
 TEXT_PROMPT = "What is the capital city of France? Answer in one sentence."
 TEXT_PROMPT = "What are the seven continents? Answer in one sentence."
 TEXT_PROMPT = "What is diffusion based generative learning?"
-TEXT_PROMPT = "How to make pizza? Answer in one sentence."
-TEXT_PROMPT = "What is diffusion based generative learning? Answer in one sentence."
+# TEXT_PROMPT = "How to make pizza? Answer in one sentence."
+# TEXT_PROMPT = "What is diffusion based generative learning? Answer in one sentence."
 
 
 def _apply_reduced_layer_config(config, num_lang_layers: int):
@@ -106,7 +106,7 @@ def main():
     if args.num_layers is not None and args.num_layers <= 0:
         raise ValueError("Number of layers must be positive.")
 
-    device_ids = [int(device_id) for device_id in os.environ.get("DG", "4,5,6,7").split(",")]
+    device_ids = None# [int(device_id) for device_id in os.environ.get("DG", "4,5,6,7").split(",")]
     processor, qeff_model = load_model_and_processor(
         MODEL_ID,
         args.canvas_length,
