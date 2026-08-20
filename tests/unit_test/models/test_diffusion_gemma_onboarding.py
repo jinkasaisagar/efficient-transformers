@@ -110,7 +110,7 @@ def test_diffusion_gemma_generate_dispatch_paths_are_forwarded(monkeypatch):
     assert out == "hf_output"
 
 
-def test_single_qpc_generate_passes_correct_diffusion_qpc_kwargs(monkeypatch):
+def test_single_qpc_generate_is_example_only():
     fake_self = object.__new__(_QEFFAutoModelForImageTextToTextSingleQPC)
     fake_self.model = SimpleNamespace(
         config=SimpleNamespace(architectures=["DiffusionGemmaForBlockDiffusion"]),
@@ -118,31 +118,14 @@ def test_single_qpc_generate_passes_correct_diffusion_qpc_kwargs(monkeypatch):
     )
     fake_self.qpc_path = None
 
-    captured = {}
-    session = object()
-
-    def _fake_generate(**kwargs):
-        captured.update(kwargs)
-        return "ok"
-
-    session_factory = MagicMock(return_value=session)
-    monkeypatch.setattr("QEfficient.transformers.models.modeling_auto.QAICInferenceSession", session_factory)
-    monkeypatch.setattr(
-        "QEfficient.transformers.models.modeling_auto.diffusion_gemma_generate_single_qpc",
-        _fake_generate,
-    )
-
-    out = fake_self.generate(
-        inputs={"input_ids": torch.ones((1, 2), dtype=torch.long)},
-        device_ids=[0],
-        runtime_ai100=True,
-        generation_len=32,
-        qpc_path="/tmp/single.qpc",
-    )
-    assert out == "ok"
-    session_factory.assert_called_once_with("/tmp/single.qpc", [0])
-    assert captured["session"] is session
-    assert captured["generation_len"] == 32
+    with pytest.raises(NotImplementedError, match="diffusion_gemma_single_qpc_example_correct.py"):
+        fake_self.diffusion_gemma_generate_singleqpc(
+            inputs={"input_ids": torch.ones((1, 2), dtype=torch.long)},
+            device_ids=[0],
+            runtime_ai100=True,
+            generation_len=32,
+            qpc_path="/tmp/single.qpc",
+        )
 
 
 def test_diffusion_gemma_export_interfaces_and_dynamic_axes():

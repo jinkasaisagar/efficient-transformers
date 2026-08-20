@@ -58,18 +58,18 @@ def _repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_kv_heads * n_rep, -1, head_dim)
 
 
-def _build_encoder_kv_valid_mask(
-    position_ids: torch.Tensor,
-    cache_shape_anchor: torch.Tensor,
-) -> torch.Tensor:
-    valid_positions = position_ids >= 0
-    last_position = torch.where(
-        valid_positions,
-        position_ids,
-        torch.full_like(position_ids, -1),
-    ).max(dim=1, keepdim=True).values
-    cache_indices = torch.cumsum(torch.ones_like(cache_shape_anchor, dtype=torch.int64), dim=1) - 1
-    return cache_indices <= last_position
+# def _build_encoder_kv_valid_mask(
+#     position_ids: torch.Tensor,
+#     cache_shape_anchor: torch.Tensor,
+# ) -> torch.Tensor:
+#     valid_positions = position_ids >= 0
+#     last_position = torch.where(
+#         valid_positions,
+#         position_ids,
+#         torch.full_like(position_ids, -1),
+#     ).max(dim=1, keepdim=True).values
+#     cache_indices = torch.cumsum(torch.ones_like(cache_shape_anchor, dtype=torch.int64), dim=1) - 1
+#     return cache_indices <= last_position
 
 
 def _clamp_to_fp16_range(t: torch.Tensor) -> torch.Tensor:
@@ -89,12 +89,6 @@ def _saturating_residual_add(residual: torch.Tensor, hidden_states: torch.Tensor
     if not _is_onnx_export():
         return residual + hidden_states
     return (residual.float() + hidden_states.float()).clamp(_FP16_CLAMP_MIN, _FP16_CLAMP_MAX).to(hidden_states.dtype)
-
-
-# ---------------------------------------------------------------------------
-# Custom RMSNorm — same as Gemma4 variant (with_scale=False support)
-# ---------------------------------------------------------------------------
-
 
 class QEffDiffusionGemmaRMSNorm(DiffusionGemmaRMSNorm):
     """Export-safe RMSNorm.
@@ -243,63 +237,6 @@ def _build_diffusion_encoder_additive_mask(
     attention_mask = base_mask & ~same_group.unsqueeze(1)
     return attention_mask.to(dtype=dtype) * mask_value
 
-
-def _build_diffusion_decoder_additive_mask(
-    canvas_length: int,
-    encoder_kv_length: int,
-    dtype: torch.dtype,
-    batch_size: int,
-    device: torch.device,
-    encoder_attention_mask: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """
-    Bidirectional mask for the diffusion decoder canvas.
-
-    Canvas tokens attend bidirectionally to (a) the *real* encoder KV positions
-    and (b) all other canvas tokens. They must NOT attend to padded/empty encoder
-    cache slots: the encoder cache is sized to ctx_len, but only the first
-    ``seq_len`` slots hold real prompt/image K/V — the remainder is junk that was
-    never meant to be read. HF's ``create_diffusion_decoder_attention_mask`` masks
-    exactly these slots (mllama/whisper/t5 do the same for cross-attention caches).
-    Leaving them unmasked lets each junk slot dilute the softmax over the real K/V.
-
-    ``encoder_attention_mask`` is the [batch, encoder_kv_length] 1/0 signal
-    (1 = real, 0 = pad). When ``None`` the mask is all-attend (legacy behaviour, kept so
-    the single-QPC / top-level paths that don't yet thread the signal are unchanged).
-
-    Mask value follows the encoder convention: ``torch.finfo(dtype).min`` on CPU
-    eager (exact 0 softmax weight, HF==QEffPT parity) and ``-1e4`` for ONNX/QPC
-    (fp16-overflow-safe).
-
-    EXPORT SAFETY: the returned mask keeps the query axis as size 1 and derives the
-    KV axis purely from the ``encoder_attention_mask`` tensor's own (dynamic) shape —
-    NO Python ``canvas_length``/``encoder_kv_length`` ints are baked into ``expand``.
-    The additive mask ``[B, 1, 1, ctx+canvas]`` broadcasts over the canvas query axis
-    inside ``attn_weights + mask``; baking those ints freezes the mask at the
-    export-dummy width and broadcast-mismatches the real runtime KV width.
-
-    Shape: [batch_size, 1, 1, encoder_kv_length + canvas_length]  (query axis broadcasts)
-    """
-    if encoder_attention_mask is None:
-        # Legacy all-attend mask (no masking). Query axis size-1 (broadcasts).
-        total_kv_len = encoder_kv_length + canvas_length
-        return torch.zeros(batch_size, 1, 1, total_kv_len, dtype=dtype, device=device)
-
-    mask_value = -1e4 if _is_onnx_export() else torch.finfo(dtype).min
-    # Padded encoder slots -> mask_value; real slots -> 0. KV width follows the input
-    # tensor's dynamic shape (no Python-int expand). [B, 1, 1, ctx]
-    enc_additive = (1 - encoder_attention_mask.to(dtype)) * mask_value
-    enc_part = enc_additive[:, None, None, :]
-    # Canvas always fully attended (bidirectional). [B, 1, 1, canvas]
-    canvas_part = torch.zeros(enc_part.shape[0], 1, 1, canvas_length, dtype=dtype, device=enc_part.device)
-    return torch.cat([enc_part, canvas_part], dim=-1)
-
-
-# ---------------------------------------------------------------------------
-# Encoder attention — causal + KV cache update (QEff-patched)
-# ---------------------------------------------------------------------------
-
-
 class QEffDiffusionGemmaEncoderTextAttention(DiffusionGemmaEncoderTextAttention):
     """Shared encoder/decoder attention over physical retained KV buffers."""
 
@@ -385,11 +322,6 @@ class QEffDiffusionGemmaEncoderTextAttention(DiffusionGemmaEncoderTextAttention)
         return attn_output, attn_weights
 
 
-# ---------------------------------------------------------------------------
-# Encoder text layer — wraps MoE + attention with QEff-patched sub-modules
-# ---------------------------------------------------------------------------
-
-
 class QEffDiffusionGemmaEncoderTextLayer(DiffusionGemmaEncoderTextLayer):
     def forward(
         self,
@@ -442,138 +374,6 @@ class QEffDiffusionGemmaEncoderTextLayer(DiffusionGemmaEncoderTextLayer):
             layer_scalar = self.layer_scalar
         hidden_states *= layer_scalar
         return hidden_states
-
-
-
-# ---------------------------------------------------------------------------
-# Decoder attention — bidirectional + read-only encoder KV cache
-# ---------------------------------------------------------------------------
-
-
-class QEffDiffusionGemmaDecoderTextAttention(DiffusionGemmaDecoderTextAttention):
-    """Decoder attention: bidirectional over canvas+encoder KV, no cache update."""
-
-    def __qeff_init__(self):
-        if hasattr(self, "v_norm") and not getattr(self.v_norm, "with_scale", True):
-            if not hasattr(self.v_norm, "_qeff_unit_weight"):
-                self.v_norm.register_buffer(
-                    "_qeff_unit_weight",
-                    torch.ones(self.head_dim, dtype=torch.float32),
-                )
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_embeddings: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        past_key_values: Optional[Cache] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        encoder_cache_position_ids: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ):
-        input_shape = hidden_states.shape[:-1]
-        hidden_shape = (*input_shape, -1, self.head_dim)
-
-        cos, sin = position_embeddings
-        query_states = self.q_proj(hidden_states).view(hidden_shape)
-        query_states = self.q_norm(query_states)
-        query_states = apply_rotary_pos_emb(query_states, cos, sin, unsqueeze_dim=2)
-        query_states = query_states.transpose(1, 2)
-
-        key_states = self.k_proj(hidden_states).view(hidden_shape)
-        value_states = self.v_proj(hidden_states).view(hidden_shape) if self.v_proj is not None else key_states
-
-        key_states = self.k_norm(key_states)
-        key_states = apply_rotary_pos_emb(key_states, cos, sin, unsqueeze_dim=2)
-        key_states = key_states.transpose(1, 2)
-
-        value_states = self.v_norm(value_states)
-        value_states = value_states.transpose(1, 2)
-
-        if past_key_values is not None:
-            # encoder_key_states, encoder_value_states = past_key_values.read_only(
-            #     self.layer_idx,
-            #     cache_kwargs={"position_ids": encoder_cache_position_ids},
-            # )
-            layer = past_key_values.layers[self.layer_idx]
-            encoder_key_states = layer.keys
-            encoder_value_states = layer.values
-            key_states = torch.cat([encoder_key_states, key_states], dim=2)
-            value_states = torch.cat([encoder_value_states, value_states], dim=2)
-
-        key_states_for_attn = _repeat_kv(key_states, self.num_key_value_groups)
-        value_states_for_attn = _repeat_kv(value_states, self.num_key_value_groups)
-
-        attn_weights = torch.matmul(query_states, key_states_for_attn.transpose(2, 3)) * self.scaling
-        if attention_mask is not None:
-            # Mask is pre-sized per layer_type by QEffDiffusionGemmaDecoderModel.forward.
-            attn_weights = attn_weights + attention_mask
-
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states_for_attn)
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(*input_shape, -1)
-        attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
-
-
-# ---------------------------------------------------------------------------
-# Decoder text layer
-# ---------------------------------------------------------------------------
-
-
-class QEffDiffusionGemmaDecoderTextLayer(DiffusionGemmaDecoderTextLayer):
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_embeddings: torch.Tensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        encoder_cache_position_ids: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ) -> torch.Tensor:
-        # Clamp to fp16 range at layer entry + saturating residual adds (mirrors the
-        # encoder layer). Without these the canvas-decode residual stream overflows
-        # fp16 → softmax NaN.
-        hidden_states = _clamp_to_fp16_range(hidden_states)
-        residual = hidden_states
-
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states, _ = self.self_attn(
-            hidden_states=hidden_states,
-            position_embeddings=position_embeddings,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            encoder_cache_position_ids=encoder_cache_position_ids,
-            **kwargs,
-        )
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = _saturating_residual_add(residual, hidden_states)
-
-        residual = hidden_states
-        hidden_states = self.pre_feedforward_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states_1 = self.post_feedforward_layernorm_1(hidden_states)
-
-        hidden_states_flat = residual.reshape(-1, residual.shape[-1])
-        _, top_k_weights, top_k_index = self.router(hidden_states_flat)
-        hidden_states_2 = self.pre_feedforward_layernorm_2(hidden_states_flat)
-        hidden_states_2 = self.experts(hidden_states_2, top_k_index, top_k_weights)
-        hidden_states_2 = hidden_states_2.reshape(residual.shape)
-        hidden_states_2 = self.post_feedforward_layernorm_2(hidden_states_2)
-
-        hidden_states = hidden_states_1 + hidden_states_2
-        hidden_states = self.post_feedforward_layernorm(hidden_states)
-        hidden_states = _saturating_residual_add(residual, hidden_states)
-        hidden_states *= self.layer_scalar
-        return hidden_states
-
-
-# ---------------------------------------------------------------------------
-# Encoder text model
-# ---------------------------------------------------------------------------
 
 
 class QEffDiffusionGemmaEncoderTextModel(DiffusionGemmaEncoderTextModel):
@@ -698,139 +498,6 @@ class QEffDiffusionGemmaEncoderTextModel(DiffusionGemmaEncoderTextModel):
         hidden_states = self.norm(hidden_states)
         next_cache = past_key_values.to_legacy_cache() if use_cache else None
         return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=next_cache)
-
-
-# ---------------------------------------------------------------------------
-# Decoder model — bidirectional diffusion denoiser
-# ---------------------------------------------------------------------------
-
-
-class QEffDiffusionGemmaDecoderModel(DiffusionGemmaDecoderModel):
-    """
-    QEff-patched decoder model.
-
-    The decoder reads the encoder's KV cache (read-only) and processes a
-    fixed-length canvas with bidirectional attention over canvas+encoder KV.
-    No KV cache update — the decoder is stateless across diffusion steps.
-    """
-
-    def forward(
-        self,
-        decoder_input_ids: torch.LongTensor,
-        past_key_values: Optional[Cache] = None,
-        self_conditioning_logits: Optional[torch.FloatTensor] = None,
-        decoder_position_ids: Optional[torch.LongTensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        prev_tokens: Optional[torch.LongTensor] = None,
-        use_self_conditioning: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ):
-        # wrap legacy cache
-        if past_key_values is not None and not isinstance(past_key_values, QEffGemma4DynamicCache):
-            past_key_values = QEffGemma4DynamicCache.from_legacy_cache(self.text_config, past_key_values)
-
-        if use_self_conditioning is None:
-            use_self_conditioning = torch.ones(1, dtype=torch.int64, device=decoder_input_ids.device)
-        use_sc = use_self_conditioning.bool().view(1, 1, 1)
-
-        inputs_embeds = self.embed_tokens(decoder_input_ids)
-
-        if prev_tokens is not None:
-            # Fused-sampler path: feed the previous step's accepted token embedding as
-            # self-conditioning (replaces softmax(prev_logits) @ embed_tokens.weight).
-            soft_embeddings = self.embed_tokens(prev_tokens) * self.embed_tokens.embed_scale.to(inputs_embeds.dtype)
-        elif self_conditioning_logits is not None:
-            soft_embeddings = torch.matmul(
-                self_conditioning_logits.softmax(dim=-1, dtype=torch.float32).to(self.embed_tokens.weight.dtype),
-                self.embed_tokens.weight,
-            ) * self.embed_tokens.embed_scale.to(inputs_embeds.dtype)
-        else:
-            soft_embeddings = torch.zeros_like(inputs_embeds)
-        soft_embeddings = torch.where(use_sc, soft_embeddings, torch.zeros_like(soft_embeddings))
-        inputs_embeds = self.self_conditioning(inputs_embeds, soft_embeddings)
-
-        canvas_length = inputs_embeds.shape[1]
-        if decoder_position_ids is None:
-            cache_seq_length = past_key_values.get_seq_length(layer_idx=0) if past_key_values is not None else 0
-            decoder_position_ids = torch.arange(
-                cache_seq_length,
-                cache_seq_length + canvas_length,
-                device=inputs_embeds.device,
-                dtype=torch.long,
-            ).unsqueeze(0)
-
-        # Build one decoder mask per layer_type. sliding_attention layers have KV
-        # width = sliding_window; full_attention layers have KV width = ctx_len.
-        # A single-width mask can't cover both because `attn_weights + mask`
-        # broadcasts on dim -1 (kv_length). We derive each type's mask width from
-        # a representative layer of that type's key tensor via `torch.ones_like` on
-        # a projection — this makes the KV axis a live shape-op in ONNX (Shape /
-        # Gather on the key tensor), which the compiler resolves to sliding_window
-        # vs ctx_len correctly per specialization.
-        #
-        # Keep encoder K/V in physical cache order and mask unused fixed-width slots.
-        # Sliding-cache wraparound permutes K/V together, which leaves attention unchanged.
-        mask_mapping = {}
-        for layer_type in self.unique_layer_types:
-            rep_layer_key = None
-            if past_key_values is not None:
-                for idx, lt in enumerate(self.text_config.layer_types):
-                    if lt == layer_type and idx < len(past_key_values.layers):
-                        candidate = past_key_values.layers[idx].keys
-                        if candidate is not None:
-                            rep_layer_key = candidate
-                            break
-
-            if rep_layer_key is not None and position_ids is not None:
-                kv_proj = rep_layer_key[:, 0:1, :, 0:1].reshape(rep_layer_key.shape[0], -1)
-                packed_valid_mask = _build_encoder_kv_valid_mask(
-                    position_ids=position_ids,
-                    cache_shape_anchor=kv_proj,
-                )
-                per_type_mask = packed_valid_mask.to(torch.int64)
-            elif rep_layer_key is not None:
-                # ones_like on a [B, 1, KV, 1] slice reshaped to [B, KV] — KV axis
-                # tracks rep_layer_key's dynamic dim -2 (sliding_window or ctx_len).
-                kv_proj = rep_layer_key[:, 0:1, :, 0:1].reshape(rep_layer_key.shape[0], -1)
-                per_type_mask = torch.ones_like(kv_proj, dtype=torch.int64)
-            else:
-                per_type_mask = None
-
-            mask_mapping[layer_type] = _build_diffusion_decoder_additive_mask(
-                canvas_length=canvas_length,
-                encoder_kv_length=rep_layer_key.shape[-2] if rep_layer_key is not None else 0,
-                dtype=inputs_embeds.dtype,
-                batch_size=inputs_embeds.shape[0],
-                device=inputs_embeds.device,
-                encoder_attention_mask=per_type_mask,
-            )
-
-        hidden_states = inputs_embeds
-        position_embeddings = {}
-        for layer_type in self.unique_layer_types:
-            position_embeddings[layer_type] = self.rotary_emb(hidden_states, decoder_position_ids, layer_type)
-
-        for i, decoder_layer in enumerate(self.layers[: self.text_config.num_hidden_layers]):
-            layer_type = self.text_config.layer_types[i]
-            hidden_states = decoder_layer(
-                hidden_states,
-                position_embeddings=position_embeddings[layer_type],
-                attention_mask=mask_mapping[layer_type],
-                position_ids=decoder_position_ids,
-                past_key_values=past_key_values,
-                encoder_cache_position_ids=position_ids,
-                **kwargs,
-            )
-
-        hidden_states = self.norm(_clamp_to_fp16_range(hidden_states))
-        return BaseModelOutputWithPast(last_hidden_state=hidden_states, past_key_values=None)
-
-
-# ---------------------------------------------------------------------------
-# Vision encoder wrapper (for dual-QPC support)
-# ---------------------------------------------------------------------------
-
 
 class QEffDiffusionGemmaVisionEncoderWrapper(nn.Module):
     """
@@ -1070,16 +737,6 @@ class QEffDiffusionGemmaUnifiedWrapper(nn.Module):
         return names
 
 
-# ---------------------------------------------------------------------------
-# Disaggregated dual-QPC wrappers
-# ---------------------------------------------------------------------------
-# Two independent single-graph QPCs:
-#   1. Encoder-prefill: input_ids + vision -> writes KV -> past_*_RetainedState
-#   2. Canvas-decode:   canvas + encoder KV (read-only input) -> canvas_logits
-# The runner host-copies past_*.{i}_RetainedState from encoder to past_*.{i} on
-# the decoder each diffusion step (examples/disagg_serving/* pattern).
-
-
 class QEffDiffusionGemmaEncoderPrefillWrapper(nn.Module):
     """Standalone encoder-prefill QPC: prompt(+vision) → filled KV cache.
 
@@ -1208,156 +865,6 @@ class QEffDiffusionGemmaEncoderPrefillWrapper(nn.Module):
         }
 
 
-class QEffDiffusionGemmaCanvasDecodeWrapper(nn.Module):
-
-    def __init__(
-        self,
-        model: "QEffDiffusionGemmaForBlockDiffusion",
-        fuse_sampler: bool = False,
-        max_top_k: int = 64,
-    ):
-        super().__init__()
-        self.model = model
-        self.lm_head = model.lm_head
-        self.config = model.config
-        self.text_config = model.config.text_config
-        self.fuse_sampler = fuse_sampler
-        self.max_top_k = max_top_k
-
-    def get_submodules_for_export(self) -> Type[nn.Module]:
-        return {QEffDiffusionGemmaDecoderTextLayer}
-
-    def forward(
-        self,
-        decoder_input_ids: torch.LongTensor,
-        decoder_position_ids: torch.LongTensor,
-        position_ids: Optional[torch.LongTensor] = None,
-        self_conditioning_logits: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        temperature: Optional[torch.Tensor] = None,
-        random_numbers: Optional[torch.Tensor] = None,
-        prev_tokens: Optional[torch.LongTensor] = None,
-        use_self_conditioning: Optional[torch.LongTensor] = None,
-        **kwargs,
-    ):
-        del kwargs
-        text_cfg = self.config.text_config
-        if past_key_values is not None and not isinstance(past_key_values, QEffGemma4DynamicCache):
-            past_key_values = QEffGemma4DynamicCache.from_legacy_cache(text_cfg, past_key_values)
-
-        dec_out = self.model.model.decoder(
-            decoder_input_ids=decoder_input_ids,
-            past_key_values=past_key_values,
-            self_conditioning_logits=None if self.fuse_sampler else self_conditioning_logits,
-            decoder_position_ids=decoder_position_ids,
-            encoder_attention_mask=encoder_attention_mask,
-            position_ids=position_ids,
-            prev_tokens=prev_tokens if self.fuse_sampler else None,
-            use_self_conditioning=use_self_conditioning,
-        )
-        canvas_logits = self.model._apply_logit_softcapping(self.lm_head(dec_out.last_hidden_state).float())
-
-        if not self.fuse_sampler:
-            return (canvas_logits,)
-
-        # Fused on-device sampler. temperature [B,1,1] broadcasts over [B,canvas,vocab];
-        # random_numbers [B,canvas,k] in (0,1) are drawn on the host. The 1e-20 clamps
-        # avoid log(0) and match the host Gumbel implementation.
-        lt = canvas_logits / temperature
-        # entropy via log_softmax (numerically stable; matches host _denoising_step bit-close)
-        shifted = lt - lt.amax(dim=-1, keepdim=True)
-        log_sum_exp = torch.log(torch.exp(shifted).sum(dim=-1, keepdim=True))
-        log_softmax = shifted - log_sum_exp
-        token_entropy = -(torch.exp(log_softmax) * log_softmax).sum(dim=-1)  # [B, canvas]
-
-        # top-k Gumbel-max denoiser: tiny RNG seed [B,canvas,k], not 256 MB
-        topk_values, topk_indices = torch.topk(lt, k=self.max_top_k, dim=-1)  # [B,canvas,k]
-        gumbel = -torch.log(-torch.log(random_numbers + 1e-20) + 1e-20)
-        win = (topk_values + gumbel).argmax(dim=-1, keepdim=True)  # [B,canvas,1]
-        denoiser_tokens = topk_indices.gather(dim=-1, index=win).squeeze(-1)  # [B, canvas]
-
-        return (denoiser_tokens, token_entropy)
-
-    # -- export metadata (single Decode specialization) --
-
-    def get_specializations(
-        self,
-        batch_size: int,
-        prefill_seq_len: int,
-        ctx_len: int,
-        canvas_length: Optional[int] = None,
-        **compiler_options,
-    ):
-        ctx_len = ctx_len or constants.INTERN_CTX_LEN
-        canvas_length = canvas_length or getattr(self.config, "canvas_length", 256)
-        text_cfg = self.config.text_config
-        spec = {
-            "batch_size": batch_size,
-            "canvas_len": canvas_length,
-            "ctx_len": ctx_len,
-            "sliding_window": text_cfg.sliding_window,
-        }
-        if self.fuse_sampler:
-            spec["max_top_k"] = self.max_top_k
-        return [spec], compiler_options
-
-    def get_onnx_dynamic_axes(self, **kwargs):
-        text_cfg = self.config.text_config
-        axes = {
-            "decoder_input_ids": {0: "batch_size", 1: "canvas_len"},
-            "decoder_position_ids": {0: "batch_size", 1: "canvas_len"},
-            "encoder_attention_mask": {0: "batch_size", 1: "ctx_len"},
-        }
-        if self.fuse_sampler:
-            # temperature is [B,1,1] (broadcast scalar per batch) — only batch dim is dynamic.
-            # random_numbers is [B,canvas,max_top_k] — k is a fixed spec symbol so no axis here.
-            # prev_tokens is [B,canvas] — the previous step's denoiser_tokens fed back for the
-            # decoder's self-conditioning path (replaces the 256 MB self_conditioning_logits).
-            axes["temperature"] = {0: "batch_size"}
-            axes["random_numbers"] = {0: "batch_size", 1: "canvas_len"}
-            axes["prev_tokens"] = {0: "batch_size", 1: "canvas_len"}
-        else:
-            axes["self_conditioning_logits"] = {0: "batch_size", 1: "canvas_len"}
-        for i, layer_type in enumerate(text_cfg.layer_types):
-            ctx_axis = {0: "batch_size", 2: "sliding_window" if layer_type == "sliding_attention" else "ctx_len"}
-            for kv in ("key", "value"):
-                axes[f"past_{kv}.{i}"] = ctx_axis
-        return axes
-
-    def get_output_names(self, **kwargs):
-        if self.fuse_sampler:
-            return ["denoiser_tokens", "token_entropy"]
-        return ["canvas_logits"]
-
-    def get_dummy_inputs(self, **kwargs):
-        bs = constants.ONNX_EXPORT_EXAMPLE_BATCH_SIZE
-        text_cfg = self.config.text_config
-        canvas_length = getattr(self.config, "canvas_length", 256)
-        # KV is sized to ctx so the decoder cross-attends the full encoder cache.
-        seq_len = max(constants.ONNX_EXPORT_EXAMPLE_SEQ_LEN, self.model._get_mm_tokens_per_image() + 32)
-        # encoder_attention_mask: per-slot 1=real / 0=pad over the encoder KV cache.
-        # Dummy marks all ctx slots real (worst case for graph liveness); the runner
-        # feeds the true mask (1 up to the real prompt length, 0 beyond) at inference.
-        enc_attn_mask = torch.ones((bs, seq_len), dtype=torch.int64)
-        inputs = {
-            "decoder_input_ids": torch.zeros((bs, canvas_length), dtype=torch.int64),
-            "decoder_position_ids": torch.arange(canvas_length, dtype=torch.int64).view(1, canvas_length).repeat(bs, 1),
-            "encoder_attention_mask": enc_attn_mask,
-            "past_key_values": self.model.get_dummy_pkv_cache(config=text_cfg, batch_size=bs, seq_len=seq_len),
-        }
-        if self.fuse_sampler:
-            inputs["temperature"] = torch.full((bs, 1, 1), 0.7, dtype=torch.float32)
-            inputs["random_numbers"] = torch.rand((bs, canvas_length, self.max_top_k), dtype=torch.float32) * 0.998 + 1e-3
-            inputs["prev_tokens"] = torch.zeros((bs, canvas_length), dtype=torch.int64)
-        else:
-            # Soft self-conditioning logits — only the un-fused path consumes this 256MB tensor.
-            inputs["self_conditioning_logits"] = torch.zeros((bs, canvas_length, text_cfg.vocab_size), dtype=torch.float32)
-        inputs["use_self_conditioning"] = torch.ones(1, dtype=torch.int64)
-        return inputs
-        return inputs
-
-
 # ---------------------------------------------------------------------------
 # Top-level model class — registered to AutoModelForImageTextToText
 # ---------------------------------------------------------------------------
@@ -1387,19 +894,7 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
     def get_qeff_encoder_prefill(self) -> QEffDiffusionGemmaEncoderPrefillWrapper:
         """Disaggregated dual-QPC: standalone encoder-prefill QPC."""
         return QEffDiffusionGemmaEncoderPrefillWrapper(self)
-
-    def get_qeff_canvas_decode(
-        self,
-        fuse_sampler: bool = False,
-        max_top_k: int = 64,
-    ) -> QEffDiffusionGemmaCanvasDecodeWrapper:
-        """Disaggregated dual-QPC: build the standalone canvas-decode wrapper.
-
-        Set ``fuse_sampler=True`` to emit ``denoiser_tokens`` / ``token_entropy``
-        on-device instead of the full ``[B, canvas, vocab]`` ``canvas_logits``.
-        """
-        return QEffDiffusionGemmaCanvasDecodeWrapper(self, fuse_sampler=fuse_sampler, max_top_k=max_top_k)
-
+    
     def get_submodules_for_export(self) -> Type[nn.Module]:
         return {QEffDiffusionGemmaEncoderTextLayer}
 

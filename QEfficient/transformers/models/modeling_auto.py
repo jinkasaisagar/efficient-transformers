@@ -72,7 +72,6 @@ from QEfficient.transformers.quantizers.quant_transforms import (
     GPTQToMatmulNbitsTransform,
     Mxfp4GptOssExpertDequantizeTransform,
 )
-from QEfficient.transformers.cloud_ai_100_diffusion_single_qpc_utils import diffusion_gemma_generate_single_qpc
 from QEfficient.transformers.diffusion_gemma_utils import diffusion_gemma_generate_dispatch
 from QEfficient.utils import (
     apply_kv_cache_prefix,
@@ -2996,28 +2995,10 @@ class _QEFFAutoModelForImageTextToTextSingleQPC(QEFFTransformersBase, Multimodal
             raise NotImplementedError("PyTorch execution is not supported for DiffusionGemma single-QPC generation.")
         if not _is_diffusion_gemma_arch(self.model.config):
             raise ValueError("`diffusion_gemma_generate_singleqpc` only supports DiffusionGemma models.")
-        if inputs is None or "input_ids" not in inputs:
-            raise ValueError("`inputs` must contain `input_ids`.")
-
-        qpc_path = Path(qpc_path) if isinstance(qpc_path, str) else (qpc_path or self.qpc_path)
-        if qpc_path is None:
-            raise ValueError("Compile the model first or pass `qpc_path`.")
-
-        generation_config = getattr(self.model, "generation_config", None)
-        pad_token_id = kwargs.pop("pad_token_id", getattr(generation_config, "pad_token_id", None))
-        eos_token_id = kwargs.pop("eos_token_id", getattr(generation_config, "eos_token_id", None))
-        if pad_token_id is None:
-            pad_token_id = 0
-
-        session = QAICInferenceSession(str(qpc_path), device_ids or None)
-        return diffusion_gemma_generate_single_qpc(
-            model_config=self.model.config,
-            inputs=inputs,
-            session=session,
-            generation_len=generation_len,
-            pad_token_id=pad_token_id,
-            eos_token_id=eos_token_id,
-            **kwargs,
+        raise NotImplementedError(
+            "DiffusionGemma single-QPC generation is supported through "
+            "examples/image_text_to_text/models/gemma_vision/diffusion_gemma/"
+            "diffusion_gemma_single_qpc_example_correct.py."
         )
 
     def cloud_ai_100_diffusion_generate(

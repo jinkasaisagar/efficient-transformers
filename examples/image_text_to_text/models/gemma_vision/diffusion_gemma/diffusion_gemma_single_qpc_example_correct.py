@@ -35,7 +35,7 @@ IMAGE_URL = (
 )
 IMAGE_PROMPT = "Describe this image in detail."
 TEXT_PROMPT = "What is the capital city of France? Answer in one sentence."
-TEXT_PROMPT = "What are the seven continents? Answer in one sentence."
+# TEXT_PROMPT = "What are the seven continents? Answer in one sentence."
 TEXT_PROMPT = "What is diffusion based generative learning?"
 # TEXT_PROMPT = "How to make pizza? Answer in one sentence."
 # TEXT_PROMPT = "What is diffusion based generative learning? Answer in one sentence."
@@ -134,7 +134,7 @@ def main():
         image_url=IMAGE_URL,
     )
     print(f'Canvas length is {CANVAS_LENGTH} and input ids is of size {inputs['input_ids'].shape[1]}')
-    breakpoint()
+    # breakpoint()
     result = diffusion_gemma_generate_single_qpc_chunked(
         qeff_model=qeff_model,
         inputs=inputs,

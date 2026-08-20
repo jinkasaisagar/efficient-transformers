@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from examples.image_text_to_text.models.gemma_vision.diffusion_gemma.diffusion_gemma_single_qpc_example_utils import (
-    ExampleChunkedDiffusionGemmaSingleQPCGenerator,
+    DiffusionGemmaSingleQPCGenerator,
 )
 
 
@@ -25,6 +25,9 @@ class _Session:
     input_names = [
         "input_ids",
         "position_ids",
+        "cache_position_ids",
+        "full_attention_mask",
+        "sliding_attention_mask",
         "vision_embeds",
         "image_idx",
         "mm_token_type_ids",
@@ -62,7 +65,7 @@ class _Session:
 
 def _generator(session):
     config = SimpleNamespace(text_config=SimpleNamespace(vocab_size=32), canvas_length=4)
-    return ExampleChunkedDiffusionGemmaSingleQPCGenerator(model_config=config, session=session, seed=7)
+    return DiffusionGemmaSingleQPCGenerator(model_config=config, session=session, seed=7)
 
 
 def test_example_prefill_chunks_prompt_by_canvas_length():
@@ -109,3 +112,47 @@ def test_example_prefill_does_not_add_chunk_for_exact_multiple():
 
     assert len(session.calls) == 2
     np.testing.assert_array_equal(session.calls[-1][0]["position_ids"], [[4, 5, 6, 7]])
+
+
+def test_host_slot_tracking_uses_block_level_sliding_rollover():
+    generator = _generator(_Session())
+    slots = np.full(8, -1, dtype=np.int64)
+
+    projected_slots = generator._project_slot_positions(
+        slots,
+        np.array([[12, 13, 14, 15]], dtype=np.int64),
+        sliding=True,
+    )
+
+    np.testing.assert_array_equal(projected_slots, [15, -1, -1, -1, -1, 12, 13, 14])
+
+
+def test_canvas_commit_reuses_active_canvas_positions_and_updates_host_masks():
+    session = _Session()
+    generator = _generator(session)
+    generator._prepare_prompt(
+        {"input_ids": torch.tensor([[1, 2]], dtype=torch.long)},
+        pad_token_id=0,
+    )
+    generator.prefill()
+
+    generator._active_canvas_position_ids = np.array([[2, 3, 4, 5]], dtype=np.int64)
+    generator._commit_canvas(np.array([[11, 12, 13, 14]], dtype=np.int64))
+
+    commit_feed = session.calls[-1][0]
+    np.testing.assert_array_equal(commit_feed["position_ids"], [[2, 3, 4, 5]])
+    assert generator._retained_last_position == 5
+    np.testing.assert_array_equal(generator._full_slot_positions[:6], [0, 1, 2, 3, 4, 5])
+
+    generator.input_ids = np.zeros((1, 4), dtype=np.int64)
+    generator.position_ids = np.array([[6, 7, 8, 9]], dtype=np.int64)
+    decode_mask = generator._build_additive_mask(
+        cache_length=generator.full_cache_length,
+        sliding=False,
+        cache_position_ids=np.full((1, 4), -1, dtype=np.int64),
+        is_encode=False,
+    )
+
+    assert np.all(decode_mask[0, 0, :, :6] == 0.0)
+    assert np.all(decode_mask[0, 0, :, 6 : generator.full_cache_length] == generator._MASK_VALUE)
+    assert np.all(decode_mask[0, 0, :, generator.full_cache_length :] == 0.0)
