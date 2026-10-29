@@ -22,9 +22,59 @@ from QEfficient import QEFFAutoModelForImageTextToText
 MODEL_ID = "google/gemma-4-E2B-it"
 SYSTEM_PROMPT = "You are a helpful assistant."
 TEXT_PROMPT = "Tell me about Taj Mahal?"
+TEXT_PROMPT = """
+What is diffusion based generative learning?
+ 
+Provide the most exhaustive and detailed explanation possible. Do not summarize. Expand every concept thoroughly. Cover:
+ 
+1. Historical background and motivation
+2. Mathematical foundations
+3. Forward diffusion process
+4. Reverse diffusion process
+5. Noise scheduling
+6. Training objectives
+7. Variational inference perspective
+8. Score matching interpretation
+9. Sampling algorithms
+10. DDPM
+11. DDIM
+12. Consistency models
+13. Flow matching
+14. Latent diffusion
+15. Stable Diffusion architecture
+16. U-Net architecture details
+17. Transformer-based diffusion models
+18. Diffusion language models
+19. Multimodal diffusion
+20. Audio diffusion
+21. Video diffusion
+22. Image generation pipelines
+23. Text conditioning methods
+24. Classifier guidance
+25. Classifier-free guidance
+26. LoRA finetuning
+27. Quantization considerations
+28. Deployment challenges
+29. Research trends
+30. Future directions
+ 
+For every section:
+- Include detailed explanations.
+- Include equations where relevant.
+- Include worked examples.
+- Include implementation details.
+- Include advantages and disadvantages.
+- Include comparisons with GANs, VAEs, autoregressive models, and flow-based models.
+- Include industry use cases.
+- Include common interview questions and answers.
+- Include practical engineering considerations.
+ 
+After completing all sections, generate an additional deep-dive appendix that expands every major concept with further technical detail. Continue elaborating until the maximum output length is reached. Do not ask questions, do not wait for user input, and do not stop early. Produce continuous technical content until generation naturally terminates.
+"""
+
 IMAGE_PROMPT = "Can you Describe this image in detail?"
 IMAGE_URL = "https://wallup.net/wp-content/uploads/2017/03/28/351036-San_Francisco-USA-bridge-sunset-Golden_Gate_Bridge-lights.jpg"
-SKIP_VISION = False
+SKIP_VISION = True
 BS = 1
 PREFILL_SEQ_LEN = 128
 CTX_LEN = 2048
@@ -103,7 +153,7 @@ def main():
         # },
     )
     remove_fp16clip_transform_if_disabled(qeff_model, True)
-
+    breakpoint()
     if SKIP_VISION:
         messages = build_messages(SYSTEM_PROMPT, TEXT_PROMPT, use_image=False)
         text_inputs = processor.apply_chat_template(

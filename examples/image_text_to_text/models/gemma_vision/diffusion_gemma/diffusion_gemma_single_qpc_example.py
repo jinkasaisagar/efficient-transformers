@@ -21,12 +21,12 @@ from QEfficient.transformers.models.diffusion_gemma_single_qpc_example_utils imp
     diffusion_gemma_prefill_split_qpc_chunked,
     prepare_prompt_inputs,
 )
+from QEfficient.utils.hardware_utils import get_default_aic_hw_version, get_default_num_cores
 
 MODEL_ID = "google/diffusiongemma-26B-A4B-it"
-CTX_LEN = 1024 # * 25
+CTX_LEN = 1024
 CANVAS_LENGTH = 256
 DIFFUSION_STEPS = 48
-NUM_CORES = 16
 NUM_DEVICES = 4
 IMAGE_URL = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/car.jpg"
 IMAGE_PROMPT = "Describe this image in detail in not less than 512 tokens"
@@ -1388,6 +1388,7 @@ def load_model_and_processor(
     num_lang_layers: int = None,
     sliding_repeat: int = 1,
     full_repeat: int = 1,
+    aic_hw_version: str = "ai100",
 ):
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
     if num_lang_layers is not None:
@@ -1398,8 +1399,7 @@ def load_model_and_processor(
         model_id,
         config=config,
         trust_remote_code=True,
-        # dtype="bfloat16",
-        dtype="float32",
+        dtype="float16" if aic_hw_version == "ai200" else "float32",
         kv_offload=False,
         ignore_mismatched_sizes=num_lang_layers is not None,
     )
@@ -1415,6 +1415,12 @@ def load_model_and_processor(
 def parse_args():
     parser = argparse.ArgumentParser(description="Run DiffusionGemma unified, split, or staged-prefill inference.")
     parser.add_argument("--runtime-mode", choices=("unified", "split", "prefill"), default="unified")
+    parser.add_argument(
+        "--aic-hw-version",
+        choices=("ai100", "ai200"),
+        default=get_default_aic_hw_version(),
+        help="Target accelerator hardware; AI200 enables BF16 for unified and split modes.",
+    )
     parser.add_argument("--text-only", action="store_true", help="Run without image tokens.")
     parser.add_argument("--prompt", help="Override the default image or text prompt.")
     parser.add_argument("--seed", type=int, default=1234, help="Use -1 for an unseeded sampler.")
@@ -1502,15 +1508,10 @@ def main():
     }
     if args.enable_decoder_blocking and args.blocking_mode == "hqkv":
         missing_hqkv_options = [
-            option_name
-            for option_name in _BLOCKING_MODE_ARGS["hqkv"]
-            if blocking_option_values[option_name] is None
+            option_name for option_name in _BLOCKING_MODE_ARGS["hqkv"] if blocking_option_values[option_name] is None
         ]
         if missing_hqkv_options:
-            raise ValueError(
-                "Decoder HQKV blocking requires explicit "
-                f"{', '.join(sorted(missing_hqkv_options))}."
-            )
+            raise ValueError(f"Decoder HQKV blocking requires explicit {', '.join(sorted(missing_hqkv_options))}.")
     for option_name, option_value in blocking_option_values.items():
         if option_value is not None and option_value <= 0:
             raise ValueError(f"{option_name} must be positive when provided.")
@@ -1518,6 +1519,8 @@ def main():
             raise ValueError(f"{option_name} is not compatible with blocking_mode={args.blocking_mode!r}.")
     if args.runtime_mode == "prefill" and not args.text_only:
         raise ValueError("Prefill-only mode requires --text-only.")
+    if args.aic_hw_version == "ai200" and args.runtime_mode == "prefill":
+        raise ValueError("AI200 BF16 is currently supported only for unified and split runtime modes.")
 
     encoder_blocking_config = None
     if args.enable_blocking:
@@ -1541,7 +1544,9 @@ def main():
         num_lang_layers=args.num_layers,
         sliding_repeat=args.sliding_kv_repeat,
         full_repeat=args.full_kv_repeat,
+        aic_hw_version=args.aic_hw_version,
     )
+    num_cores = get_default_num_cores(args.aic_hw_version)
     text_config = qeff_model.model.config.text_config
     print(
         f"Compiling a {text_config.num_hidden_layers}-layer DiffusionGemma model | "
@@ -1555,7 +1560,8 @@ def main():
             ctx_len=args.ctx_len,
             canvas_length=args.canvas_length,
             num_devices=NUM_DEVICES,
-            num_cores=NUM_CORES,
+            num_cores=num_cores,
+            aic_hw_version=args.aic_hw_version,
         )
         qpc_kwargs = {"qpc_path": qpc_path}
     else:
@@ -1565,11 +1571,12 @@ def main():
             ctx_len=args.ctx_len,
             canvas_length=args.canvas_length,
             num_devices=NUM_DEVICES,
-            num_cores=NUM_CORES,
+            num_cores=num_cores,
             prefill_stages=args.prefill_stages,
             text_only=args.text_only,
             encoder_blocking_config=encoder_blocking_config,
             decoder_blocking_config=decoder_blocking_config,
+            aic_hw_version=args.aic_hw_version,
         )
         qpc_kwargs = {
             "encoder_qpc_path": encoder_qpc_path,

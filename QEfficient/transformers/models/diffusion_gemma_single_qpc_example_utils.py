@@ -587,7 +587,7 @@ class DiffusionGemmaSingleQPCGenerator:
         t_min: float = 0.4,
         t_max: float = 0.8,
         stability_threshold: int = 1,
-        confidence_threshold: float = 0.005,
+        confidence_threshold: float = 0.01,
         ctx_len: Optional[int] = None,
         pad_token_id: int = 0,
         eos_token_id=None,
@@ -614,7 +614,6 @@ class DiffusionGemmaSingleQPCGenerator:
         ):
             raise ValueError("`confidence_threshold` must be a non-negative number.")
 
-        total_start = perf_counter()
         try:
             sequence_length = self._prepare_prompt(inputs, pad_token_id=pad_token_id)
             compiled_ctx_len = ctx_len or _infer_context_length(self.session)
@@ -624,6 +623,7 @@ class DiffusionGemmaSingleQPCGenerator:
             if target_new_tokens <= 0:
                 raise ValueError("The compiled context length has no room for generated tokens.")
 
+            total_start = perf_counter()
             ttft, retained_kv_buffers = self.prefill(debug_callback=debug_callback)
             eos_token_ids = _normalize_eos_token_ids(eos_token_id)
             generated = []
@@ -918,6 +918,7 @@ def compile_unified_qpc(
     canvas_length: int,
     num_devices: int,
     num_cores: int,
+    aic_hw_version: str = "ai100",
 ):
     print(f"Compiling unified single-QPC ({num_devices} devices, {num_cores} cores)...")
     start = time.time()
@@ -944,7 +945,9 @@ def compile_unified_qpc(
     # npi_file_path = '/home/jsaisaga//home/jsaisaga/.cache/qeff_models/DiffusionGemmaForBlockDiffusion/DiffusionGemmaUnifiedWrapper-9c317201f1a690a7/npi_fp32_unified_accum.yaml'
     npi_file_path = qeff_model.generate_npi_file(onnx_path)
 
-    custom_io = {"vision_embeds": "float16"}
+    custom_io = {}
+    if aic_hw_version != "ai200":
+        custom_io["vision_embeds"] = "float16"
     for layer_index in range(qeff_model.config.text_config.num_hidden_layers):
         for kv_name in ("key", "value"):
             custom_io[f"past_{kv_name}.{layer_index}"] = "mxint8"
@@ -954,11 +957,11 @@ def compile_unified_qpc(
         onnx_path=onnx_path,
         compile_dir=None,
         specializations=specializations,
-        convert_to_fp16=True,
+        convert_to_fp16=aic_hw_version != "ai200",
         mxfp6_matmul=True,
         mdp_ts_num_devices=num_devices,
         aic_num_cores=num_cores,
-        # aic_hw_version="ai200",
+        aic_hw_version=aic_hw_version,
         custom_io=custom_io,
         retained_state=True,
         qaic_config=qaic_config_moe,
@@ -981,6 +984,7 @@ def compile_split_qpcs(
     text_only: bool = False,
     encoder_blocking_config: Optional[Dict[str, object]] = None,
     decoder_blocking_config: Optional[Dict[str, object]] = None,
+    aic_hw_version: str = "ai100",
 ):
     prefill_stages = _validate_prefill_stages(prefill_stages)
     if prefill_seq_len != canvas_length:
@@ -1047,10 +1051,11 @@ def compile_split_qpcs(
             custom_io[f"past_{kv_name}.{layer_index}_RetainedState"] = "mxint8"
     common_compile_kwargs = {
         "compile_dir": None,
-        "convert_to_fp16": True,
+        "convert_to_fp16": aic_hw_version != "ai200",
         "mxfp6_matmul": True,
         "mdp_ts_num_devices": num_devices,
         "aic_num_cores": num_cores,
+        "aic_hw_version": aic_hw_version,
         "retained_state": True,
         "retain_full_kv": True,
         "split_retained_state_io": True,

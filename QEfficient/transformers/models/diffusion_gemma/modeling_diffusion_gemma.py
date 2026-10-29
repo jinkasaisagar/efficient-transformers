@@ -255,7 +255,7 @@ def _repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 def _clamp_to_fp16_range(t: torch.Tensor) -> torch.Tensor:
-    if not _is_onnx_export():
+    if not _is_onnx_export() or t.dtype != torch.float32:
         return t
     return t.clamp(_FP16_CLAMP_MIN, _FP16_CLAMP_MAX)
 
@@ -268,7 +268,7 @@ def _saturating_residual_add(residual: torch.Tensor, hidden_states: torch.Tensor
     matmuls and NaN softmax rows. The encoder's layer-entry clamp kept its residual
     bounded; the decoder has no such guard.
     """
-    if not _is_onnx_export():
+    if not _is_onnx_export() or hidden_states.dtype != torch.float32:
         return residual + hidden_states
     return (residual.float() + hidden_states.float()).clamp(_FP16_CLAMP_MIN, _FP16_CLAMP_MAX).to(hidden_states.dtype)
 
@@ -318,10 +318,10 @@ class QEffDiffusionGemmaRMSNorm(DiffusionGemmaRMSNorm):
         if not _is_onnx_export():
             return super().forward(hidden_states)
         if getattr(self, "with_scale", True):
-            return CustomRMSNormFunc.apply(hidden_states, self.weight, self.eps)
+            return CustomRMSNormFunc.apply(hidden_states, self.weight.to(hidden_states.dtype), self.eps)
         weight = getattr(self, "_qeff_unit_weight", None)
         if weight is not None and weight.shape[-1] != 1:
-            return CustomRMSNormFunc.apply(hidden_states, weight, self.eps)
+            return CustomRMSNormFunc.apply(hidden_states, weight.to(hidden_states.dtype), self.eps)
         return super().forward(hidden_states)
 
 
@@ -341,7 +341,7 @@ class QEffDiffusionGemmaTextRouter(DiffusionGemmaTextRouter):
 
     def forward(self, hidden_states: torch.Tensor):
         hidden_states = self.norm(hidden_states)
-        hidden_states = hidden_states * self.scale * self.scalar_root_size
+        hidden_states = (hidden_states * self.scale * self.scalar_root_size).to(self.proj.weight.dtype)
 
         router_probabilities = nn.functional.softmax(self.proj(hidden_states), dim=-1)
         top_k_weights, top_k_index = torch.topk(
@@ -454,6 +454,11 @@ class QEffDiffusionGemmaEncoderTextAttention(DiffusionGemmaEncoderTextAttention)
         value_states = self.v_norm(value_states)
         value_states = value_states.transpose(1, 2)
 
+        if past_key_values is not None:
+            cached_values = past_key_values.layers[self.layer_idx].values
+            if cached_values is not None and value_states.dtype != cached_values.dtype:
+                value_states = value_states.to(cached_values.dtype)
+
         cache_position_ids = cache_position_ids if cache_position_ids is not None else position_ids
         blocking_config = getattr(self, "attn_blocking_config", AttentionBlockingConfig())
         use_blocking = (
@@ -519,7 +524,7 @@ class QEffDiffusionGemmaEncoderTextAttention(DiffusionGemmaEncoderTextAttention)
             )
         else:
             key_states_for_attn = _repeat_kv(key_states, self.num_key_value_groups)
-            value_states_for_attn = _repeat_kv(value_states, self.num_key_value_groups)
+            value_states_for_attn = _repeat_kv(value_states, self.num_key_value_groups).to(query_states.dtype)
             attn_weights = torch.matmul(query_states, key_states_for_attn.transpose(2, 3)) * self.scaling
             if attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
@@ -807,7 +812,8 @@ class QEffDiffusionGemmaUnifiedWrapper(nn.Module):
             "position_ids": position_ids,
             "cache_position_ids": position_ids.clone(),
             "vision_embeds": torch.zeros(
-                (batch_size, mm_tokens_per_image, text_config.hidden_size), dtype=torch.float32
+                (batch_size, mm_tokens_per_image, text_config.hidden_size),
+                dtype=self.model._get_text_compute_dtype(),
             ),
             "image_idx": torch.zeros((1, 1), dtype=torch.int64),
             "mm_token_type_ids": mm_token_type_ids,
@@ -1179,7 +1185,11 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
         default_output_length = getattr(self.config.vision_config, "default_output_length", 280)
         return default_output_length * pooling_kernel_size * pooling_kernel_size
 
+    def _get_text_compute_dtype(self) -> torch.dtype:
+        return self.model.encoder.language_model.embed_tokens.weight.dtype
+
     def get_dummy_pkv_cache(self, config, batch_size: int, seq_len: int):
+        key_dtype = self._get_text_compute_dtype()
         past_key_values = []
         for layer_type in config.layer_types:
             if layer_type == "sliding_attention":
@@ -1192,7 +1202,17 @@ class QEffDiffusionGemmaForBlockDiffusion(DiffusionGemmaForBlockDiffusion):
                 layer_seq_len = seq_len
             cache_shape = [batch_size, n_heads, layer_seq_len, d_head]
             past_key_values.append(
-                (torch.zeros(cache_shape, dtype=torch.float32), torch.zeros(cache_shape, dtype=torch.float32))
+                (
+                    torch.zeros(cache_shape, dtype=key_dtype),
+                    # Retained-state tensors must use one floating-point format on
+                    # AI200.  A BF16 key paired with an FP32 value reaches the
+                    # compiler's D32 conversion pass as a mixed-format cache and
+                    # is rejected ("Unexpected data type in hoistConvertToD32").
+                    # The value is cast to the query dtype before attention, so
+                    # matching the model's compute dtype is also the natural
+                    # eager/export representation.
+                    torch.zeros(cache_shape, dtype=key_dtype),
+                )
             )
         return past_key_values
 

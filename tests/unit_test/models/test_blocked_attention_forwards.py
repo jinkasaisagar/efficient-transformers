@@ -463,7 +463,15 @@ class TestSkipKvBreakPreserved:
 
 
 @pytest.mark.cache
-def test_qkv_ephemeral_kv_matches_concatenated_attention():
+@pytest.mark.parametrize(
+    "blocking_function, blocking_kwargs",
+    [
+        (blocked_qkv_attention_forward, {"num_q_blocks": 2}),
+        (blocked_hqkv_attention_forward, {"num_q_blocks": 2, "head_block_size": 1}),
+    ],
+    ids=["qkv", "hqkv"],
+)
+def test_blocked_ephemeral_kv_matches_concatenated_attention(blocking_function, blocking_kwargs):
     heads = 2
     ctx_len = 6
     canvas_len = 3
@@ -482,7 +490,7 @@ def test_qkv_ephemeral_kv_matches_concatenated_attention():
     attention_mask = torch.zeros(1, 1, query_len, ctx_len + canvas_len, dtype=torch.bool)
     attention_mask[..., 0, -1] = True
 
-    attn_output, _ = blocked_qkv_attention_forward(
+    attn_output, _ = blocking_function(
         module=module,
         query=query,
         key=ephemeral_key,
@@ -490,7 +498,7 @@ def test_qkv_ephemeral_kv_matches_concatenated_attention():
         attention_mask=attention_mask,
         scaling=SCALING,
         num_kv_blocks=2,
-        num_q_blocks=2,
+        **blocking_kwargs,
         cache_kwargs={"position_ids": torch.full((1, query_len), ctx_len - 1, dtype=torch.int64)},
         layer_idx=0,
         past_key_value=cache,
@@ -509,7 +517,7 @@ def test_qkv_ephemeral_kv_matches_concatenated_attention():
 
     export_attention_mask = torch.zeros(1, 1, query_len, query_len + canvas_len, dtype=torch.bool)
     export_attention_mask[..., 0, -1] = True
-    export_output, _ = blocked_qkv_attention_forward(
+    export_output, _ = blocking_function(
         module=module,
         query=query,
         key=ephemeral_key,
@@ -517,7 +525,7 @@ def test_qkv_ephemeral_kv_matches_concatenated_attention():
         attention_mask=export_attention_mask,
         scaling=SCALING,
         num_kv_blocks=2,
-        num_q_blocks=2,
+        **blocking_kwargs,
         cache_kwargs={"position_ids": torch.full((1, query_len), ctx_len - 1, dtype=torch.int64)},
         layer_idx=0,
         past_key_value=cache,

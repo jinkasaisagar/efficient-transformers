@@ -5003,7 +5003,13 @@ def test_kimi_k25_get_specializations_supports_multi_resolution_grid_sizes():
         )
 
 
-def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("aic_hw_version", "expects_fp16_conversion"),
+    [("ai100", True), ("ai200", False)],
+)
+def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(
+    monkeypatch, tmp_path, aic_hw_version, expects_fp16_conversion
+):
     from types import SimpleNamespace
 
     import QEfficient.transformers.models.diffusion_gemma_single_qpc_example_utils as diffusion_utils
@@ -5015,9 +5021,10 @@ def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(monkeypatch, tmp
     class FakeQPC:
         role = "qpc"
 
-        def __init__(self, model, include_image_idx=True):
+        def __init__(self, model, include_image_idx=True, enable_diffusion_decoder_blocking=False):
             self.model = self
             self.include_image_idx = include_image_idx
+            self.enable_diffusion_decoder_blocking = enable_diffusion_decoder_blocking
             constructed.append(self)
 
         def get_specializations(self, **kwargs):
@@ -5040,6 +5047,13 @@ def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(monkeypatch, tmp
     monkeypatch.setattr(diffusion_utils, "DiffusionGemmaEncoderQPC", FakeEncoderQPC)
     monkeypatch.setattr(diffusion_utils, "DiffusionGemmaDecoderQPC", FakeDecoderQPC)
 
+    decoder_blocking_config = {
+        "enable_blocking": True,
+        "blocking_mode": "hqkv",
+        "num_kv_blocks": 2,
+        "num_q_blocks": 1,
+        "head_block_size": 4,
+    }
     qeff_model = SimpleNamespace(
         config=SimpleNamespace(text_config=SimpleNamespace(num_hidden_layers=2)),
         generate_npi_file=lambda path: tmp_path / "decoder_npi.yaml",
@@ -5063,10 +5077,13 @@ def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(monkeypatch, tmp
         prefill_stages=3,
         text_only=True,
         encoder_blocking_config=encoder_blocking_config,
+        decoder_blocking_config=decoder_blocking_config,
+        aic_hw_version=aic_hw_version,
     )
 
     assert [role for role, _ in captured] == ["encoder", "decoder"]
     assert constructed[0].include_image_idx is False
+    assert constructed[1].enable_diffusion_decoder_blocking is True
     assert captured[0][1]["mdp_num_partitions"] == 3
     assert "mdp_num_partitions" not in captured[1][1]
     assert captured[0][1]["use_onnx_subfunctions"] is True
@@ -5079,6 +5096,8 @@ def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(monkeypatch, tmp
     }
     for _, kwargs in captured:
         assert kwargs["custom_io"] == expected_custom_io
+        assert kwargs["aic_hw_version"] == aic_hw_version
+        assert kwargs["convert_to_fp16"] is expects_fp16_conversion
 
     encoder_export_config = next(kwargs["qaic_config"] for role, kwargs in exported if role == "encoder")
     decoder_export_config = next(kwargs["qaic_config"] for role, kwargs in exported if role == "decoder")
@@ -5094,8 +5113,12 @@ def test_diffusion_gemma_split_compile_uses_paired_mxint8_kv_io(monkeypatch, tmp
     assert encoder_export_config["head_block_size"] == 8
     assert encoder_export_config["num_batch_blocks"] == 1
     assert encoder_compile_config == encoder_export_config
+    assert decoder_export_config["blocking_mode"] == "hqkv"
+    assert decoder_export_config["num_kv_blocks"] == 2
+    assert decoder_export_config["num_q_blocks"] == 1
+    assert decoder_export_config["head_block_size"] == 4
+    assert decoder_compile_config == decoder_export_config
     assert "enable_blocking" not in decoder_export_config
-    assert "enable_blocking" not in decoder_compile_config
 
     with pytest.raises(ValueError, match="prefill_stages"):
         diffusion_utils.compile_split_qpcs(
@@ -5142,6 +5165,208 @@ def test_diffusion_gemma_unified_qpc_export_forwards_subfunction_options():
         "qaic_config": qaic_config,
         "use_onnx_subfunctions": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("aic_hw_version", "expects_fp16_conversion", "vision_embeds_dtype"),
+    [("ai100", True, "float16"), ("ai200", False, None)],
+)
+def test_diffusion_gemma_unified_compile_uses_hardware_specific_precision(
+    monkeypatch, tmp_path, aic_hw_version, expects_fp16_conversion, vision_embeds_dtype
+):
+    import QEfficient.transformers.models.diffusion_gemma_single_qpc_example_utils as diffusion_utils
+
+    captured_compile_kwargs = {}
+
+    class FakeUnifiedQPC:
+        def __init__(self, model):
+            del model
+            self.model = SimpleNamespace(get_specializations=lambda **kwargs: ([{"_graph_name": "Unified"}], {}))
+
+        def get_onnx_path(self, **kwargs):
+            del kwargs
+            return tmp_path / "unified.onnx"
+
+        def _compile(self, **kwargs):
+            captured_compile_kwargs.update(kwargs)
+            return tmp_path / "qpc"
+
+    monkeypatch.setattr(diffusion_utils, "UnifiedQPC", FakeUnifiedQPC)
+    qeff_model = SimpleNamespace(
+        config=SimpleNamespace(text_config=SimpleNamespace(num_hidden_layers=1)),
+        generate_npi_file=lambda path: tmp_path / "npi.yaml",
+    )
+
+    diffusion_utils.compile_unified_qpc(
+        qeff_model,
+        prefill_seq_len=4,
+        ctx_len=8,
+        canvas_length=4,
+        num_devices=1,
+        num_cores=4,
+        aic_hw_version=aic_hw_version,
+    )
+
+    assert captured_compile_kwargs["aic_hw_version"] == aic_hw_version
+    assert captured_compile_kwargs["convert_to_fp16"] is expects_fp16_conversion
+    assert captured_compile_kwargs["custom_io"].get("vision_embeds") == vision_embeds_dtype
+
+
+def test_diffusion_gemma_unified_dummy_inputs_use_bf16_vision_and_kv_cache():
+    from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
+        QEffDiffusionGemmaForBlockDiffusion,
+        QEffDiffusionGemmaUnifiedWrapper,
+    )
+
+    class FakeDiffusionGemmaModel:
+        _get_text_compute_dtype = QEffDiffusionGemmaForBlockDiffusion._get_text_compute_dtype
+        get_dummy_pkv_cache = QEffDiffusionGemmaForBlockDiffusion.get_dummy_pkv_cache
+
+        def __init__(self):
+            self.config = SimpleNamespace(vision_config=SimpleNamespace(default_output_length=2))
+            self.model = SimpleNamespace(
+                encoder=SimpleNamespace(
+                    language_model=SimpleNamespace(embed_tokens=nn.Embedding(4, 4, dtype=torch.bfloat16))
+                )
+            )
+
+        def _get_mm_tokens_per_image(self):
+            return 2
+
+    qeff_model = FakeDiffusionGemmaModel()
+    wrapper = object.__new__(QEffDiffusionGemmaUnifiedWrapper)
+    wrapper.config = SimpleNamespace(image_token_id=0)
+    wrapper.text_config = SimpleNamespace(
+        layer_types=["sliding_attention", "full_attention"],
+        num_key_value_heads=1,
+        num_global_key_value_heads=1,
+        head_dim=2,
+        global_head_dim=2,
+        hidden_size=4,
+        sliding_window=3,
+    )
+    wrapper.model = qeff_model
+
+    inputs = wrapper.get_dummy_inputs()
+
+    assert inputs["vision_embeds"].dtype is torch.bfloat16
+    assert all(key.dtype is torch.bfloat16 and value.dtype is torch.bfloat16 for key, value in inputs["past_key_values"])
+    assert inputs["full_attention_mask"].dtype is torch.float32
+    assert inputs["sliding_attention_mask"].dtype is torch.float32
+    assert inputs["self_conditioning_topk_probabilities"].dtype is torch.float32
+
+
+def test_diffusion_gemma_bf16_attention_casts_fp32_cache_values():
+    from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
+        QEffDiffusionGemmaEncoderTextAttention,
+    )
+
+    attention = object.__new__(QEffDiffusionGemmaEncoderTextAttention)
+    nn.Module.__init__(attention)
+    attention.q_proj = nn.Identity()
+    attention.k_proj = nn.Identity()
+    attention.v_proj = nn.Identity()
+    attention.o_proj = nn.Identity()
+    attention.q_norm = nn.Identity()
+    attention.k_norm = nn.Identity()
+    attention.v_norm = nn.Identity()
+    attention.head_dim = 2
+    attention.num_key_value_groups = 1
+    attention.scaling = 1.0
+    attention.layer_idx = 0
+    attention.sliding_window = None
+
+    captured = {}
+
+    class Cache:
+        def __init__(self):
+            self.layers = [
+                SimpleNamespace(
+                    keys=torch.zeros((1, 2, 1, 2), dtype=torch.bfloat16),
+                    values=torch.zeros((1, 2, 1, 2), dtype=torch.float32),
+                )
+            ]
+
+        def update(self, key_states, value_states, layer_idx, cache_kwargs):
+            del layer_idx, cache_kwargs
+            captured["value_dtype"] = value_states.dtype
+            self.layers[0].keys = key_states
+            self.layers[0].values = value_states
+            return key_states, value_states
+
+    attention_output, _ = attention(
+        hidden_states=torch.ones((1, 1, 4), dtype=torch.bfloat16),
+        position_embeddings=(
+            torch.ones((1, 1, 2, 2), dtype=torch.bfloat16),
+            torch.zeros((1, 1, 2, 2), dtype=torch.bfloat16),
+        ),
+        attention_mask=None,
+        past_key_values=Cache(),
+        position_ids=torch.zeros((1, 1), dtype=torch.int64),
+    )
+
+    assert captured["value_dtype"] is torch.float32
+    assert attention_output.dtype is torch.bfloat16
+
+
+def test_diffusion_gemma_bf16_router_casts_scaled_activations_to_projection_dtype():
+    from QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma import QEffDiffusionGemmaTextRouter
+
+    router = object.__new__(QEffDiffusionGemmaTextRouter)
+    nn.Module.__init__(router)
+    router.norm = nn.Identity()
+    router.scale = nn.Parameter(torch.ones(4, dtype=torch.float32))
+    router.scalar_root_size = 0.5
+    router.proj = nn.Linear(4, 2, bias=False, dtype=torch.bfloat16)
+    router.config = SimpleNamespace(top_k_experts=1)
+    router.per_expert_scale = nn.Parameter(torch.ones(2, dtype=torch.float32))
+
+    router_probabilities, _, _ = router(torch.ones((1, 4), dtype=torch.bfloat16))
+
+    assert router_probabilities.dtype is torch.bfloat16
+
+
+@pytest.mark.parametrize("with_scale", [True, False])
+def test_diffusion_gemma_rms_norm_casts_custom_op_weight_to_activation_dtype(monkeypatch, with_scale):
+    import QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma as diffusion_modeling
+
+    norm = object.__new__(diffusion_modeling.QEffDiffusionGemmaRMSNorm)
+    nn.Module.__init__(norm)
+    norm.with_scale = with_scale
+    norm.eps = 1e-6
+    if with_scale:
+        norm.weight = nn.Parameter(torch.ones(4, dtype=torch.float32))
+    else:
+        norm.register_buffer("_qeff_unit_weight", torch.ones(4, dtype=torch.float32))
+
+    captured = {}
+
+    def fake_custom_rms_norm(hidden_states, weight, eps):
+        captured["weight_dtype"] = weight.dtype
+        return hidden_states
+
+    monkeypatch.setattr(diffusion_modeling, "_is_onnx_export", lambda: True)
+    monkeypatch.setattr(diffusion_modeling.CustomRMSNormFunc, "apply", fake_custom_rms_norm)
+
+    norm(torch.ones((1, 4), dtype=torch.bfloat16))
+
+    assert captured["weight_dtype"] is torch.bfloat16
+
+
+@pytest.mark.parametrize(("dtype", "expects_clip"), [(torch.float32, True), (torch.bfloat16, False)])
+def test_diffusion_gemma_export_clamps_only_fp32_activations(tmp_path, dtype, expects_clip):
+    import QEfficient.transformers.models.diffusion_gemma.modeling_diffusion_gemma as diffusion_modeling
+
+    class ClampModule(nn.Module):
+        def forward(self, hidden_states):
+            hidden_states = diffusion_modeling._clamp_to_fp16_range(hidden_states)
+            return diffusion_modeling._saturating_residual_add(hidden_states, hidden_states)
+
+    onnx_path = tmp_path / f"diffusion_gemma_{dtype}.onnx"
+    torch.onnx.export(ClampModule(), torch.ones((1, 4), dtype=dtype), onnx_path, opset_version=17)
+
+    graph = onnx.load(onnx_path).graph
+    assert any(node.op_type == "Clip" for node in graph.node) is expects_clip
 
 
 @pytest.mark.parametrize(
@@ -5700,3 +5925,429 @@ def test_diffusion_gemma_prefill_runtime_returns_decoder_ready_kv(monkeypatch):
             encoder_qpc_path="encoder.qpc",
             decoder_qpc_path="decoder.qpc",
         )
+
+
+def test_diffusion_gemma_single_example_selects_dtype_from_hardware_target(monkeypatch):
+    import importlib.util
+    import sys
+
+    example_path = (
+        Path(__file__).resolve().parents[3]
+        / "examples/image_text_to_text/models/gemma_vision/diffusion_gemma"
+        / "diffusion_gemma_single_qpc_example.py"
+    )
+    module_name = "diffusion_gemma_single_qpc_hardware_target_test"
+    spec = importlib.util.spec_from_file_location(module_name, example_path)
+    example = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = example
+    assert spec.loader is not None
+    spec.loader.exec_module(example)
+
+    captured_dtypes = []
+
+    monkeypatch.setattr(example.AutoConfig, "from_pretrained", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(example.AutoProcessor, "from_pretrained", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(example, "replicate_kv_heads_diffusion_gemma", lambda *args, **kwargs: None)
+
+    def fake_from_pretrained(*args, **kwargs):
+        del args
+        captured_dtypes.append(kwargs["dtype"])
+        return SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace()))
+
+    monkeypatch.setattr(example.QEFFAutoModelForImageTextToText, "from_pretrained", fake_from_pretrained)
+
+    for aic_hw_version in ("ai100", "ai200"):
+        example.load_model_and_processor("unused", canvas_length=4, aic_hw_version=aic_hw_version)
+
+    assert captured_dtypes == ["float32", "bfloat16"]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(example_path), "--aic-hw-version", "ai200", "--runtime-mode", "prefill", "--text-only"],
+    )
+    with pytest.raises(ValueError, match="supported only for unified and split"):
+        example.main()
+
+
+def test_diffusion_gemma_single_example_forwards_ai200_to_split_compile(monkeypatch):
+    import importlib.util
+    import sys
+
+    example_path = (
+        Path(__file__).resolve().parents[3]
+        / "examples/image_text_to_text/models/gemma_vision/diffusion_gemma"
+        / "diffusion_gemma_single_qpc_example.py"
+    )
+    module_name = "diffusion_gemma_single_qpc_ai200_split_test"
+    spec = importlib.util.spec_from_file_location(module_name, example_path)
+    example = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = example
+    assert spec.loader is not None
+    spec.loader.exec_module(example)
+
+    captured_compile_kwargs = {}
+    captured_generate_kwargs = {}
+    text_config = SimpleNamespace(num_hidden_layers=1, num_key_value_heads=1, num_global_key_value_heads=1)
+    qeff_model = SimpleNamespace(model=SimpleNamespace(config=SimpleNamespace(text_config=text_config)))
+
+    monkeypatch.setattr(
+        example,
+        "load_model_and_processor",
+        lambda *args, **kwargs: (SimpleNamespace(tokenizer=object()), qeff_model),
+    )
+
+    def fake_compile_split_qpcs(*args, **kwargs):
+        del args
+        captured_compile_kwargs.update(kwargs)
+        return "encoder.qpc", "decoder.qpc"
+
+    monkeypatch.setattr(example, "compile_split_qpcs", fake_compile_split_qpcs)
+    monkeypatch.setattr(
+        example,
+        "prepare_prompt_inputs",
+        lambda **kwargs: {"input_ids": torch.zeros((1, 1), dtype=torch.int64)},
+    )
+
+    def fake_generate(**kwargs):
+        captured_generate_kwargs.update(kwargs)
+        raise RuntimeError("stop after split invocation")
+
+    qeff_model.cloud_ai_100_diffusion_generate = fake_generate
+    monkeypatch.setattr(sys, "argv", [str(example_path), "--aic-hw-version", "ai200", "--runtime-mode", "split"])
+
+    with pytest.raises(RuntimeError, match="stop after split invocation"):
+        example.main()
+
+    assert captured_compile_kwargs["aic_hw_version"] == "ai200"
+    assert captured_generate_kwargs["runtime_mode"] == "split"
+
+
+def test_diffusion_gemma_split_example_replicates_kv_heads_and_validates_cache_geometry(monkeypatch):
+    import importlib.util
+    import sys
+
+    example_path = (
+        Path(__file__).resolve().parents[3]
+        / "examples/image_text_to_text/models/gemma_vision/diffusion_gemma"
+        / "diffusion_gemma_split_qpc_kv_replication_example.py"
+    )
+    module_name = "diffusion_gemma_split_qpc_kv_replication_example_test"
+    spec = importlib.util.spec_from_file_location(module_name, example_path)
+    example = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = example
+    assert spec.loader is not None
+    spec.loader.exec_module(example)
+
+    monkeypatch.setattr(sys, "argv", [str(example_path)])
+    default_args = example.parse_args()
+    assert default_args.sliding_kv_repeat == 1
+    assert default_args.full_kv_repeat == 1
+
+    class Attention(nn.Module):
+        def __init__(self, num_kv_heads: int, head_dim: int, hidden_size: int):
+            super().__init__()
+            self.k_proj = nn.Linear(hidden_size, num_kv_heads * head_dim, bias=False)
+            self.v_proj = nn.Linear(hidden_size, num_kv_heads * head_dim, bias=False)
+            self.num_key_value_heads = num_kv_heads
+            self.num_key_value_groups = 4 // num_kv_heads
+
+    text_config = SimpleNamespace(
+        num_hidden_layers=2,
+        layer_types=["sliding_attention", "full_attention"],
+        num_attention_heads=4,
+        num_key_value_heads=1,
+        num_global_key_value_heads=None,
+        hidden_size=8,
+        head_dim=2,
+        global_head_dim=4,
+        sliding_window=3,
+    )
+    sliding_attention = Attention(num_kv_heads=1, head_dim=2, hidden_size=8)
+    full_attention = Attention(num_kv_heads=1, head_dim=4, hidden_size=8)
+    with torch.no_grad():
+        sliding_attention.k_proj.weight.copy_(torch.arange(16, dtype=torch.float32).view(2, 8))
+        full_attention.k_proj.weight.copy_(torch.arange(32, dtype=torch.float32).view(4, 8))
+    model = SimpleNamespace(
+        config=SimpleNamespace(text_config=text_config),
+        model=SimpleNamespace(
+            encoder=SimpleNamespace(
+                language_model=SimpleNamespace(
+                    layers=[
+                        SimpleNamespace(self_attn=sliding_attention),
+                        SimpleNamespace(self_attn=full_attention),
+                    ]
+                )
+            )
+        ),
+    )
+
+    def get_dummy_pkv_cache(config, batch_size, seq_len):
+        del batch_size
+        return [
+            (
+                torch.zeros(1, config.num_key_value_heads, min(config.sliding_window, seq_len), config.head_dim),
+                torch.zeros(1, config.num_key_value_heads, min(config.sliding_window, seq_len), config.head_dim),
+            ),
+            (
+                torch.zeros(1, config.num_global_key_value_heads, seq_len, config.global_head_dim),
+                torch.zeros(1, config.num_global_key_value_heads, seq_len, config.global_head_dim),
+            ),
+        ]
+
+    model.get_dummy_pkv_cache = get_dummy_pkv_cache
+    original_sliding_weight = sliding_attention.k_proj.weight.detach().clone()
+    original_full_weight = full_attention.k_proj.weight.detach().clone()
+
+    geometry = example.replicate_kv_heads_diffusion_gemma(model, sliding_repeat=2, full_repeat=2)
+
+    assert text_config.num_key_value_heads == 2
+    assert text_config.num_global_key_value_heads == 2
+    assert sliding_attention.num_key_value_groups == 2
+    assert full_attention.num_key_value_groups == 2
+    assert torch.equal(sliding_attention.k_proj.weight, torch.cat([original_sliding_weight] * 2, dim=0))
+    assert torch.equal(full_attention.k_proj.weight, torch.cat([original_full_weight] * 2, dim=0))
+    assert [(entry.num_kv_heads, entry.cache_length, entry.head_dim) for entry in geometry] == [(2, 1, 2), (2, 1, 4)]
+    assert [
+        (entry.num_kv_heads, entry.cache_length, entry.head_dim) for entry in example.split_cache_geometry(model, 8)
+    ] == [
+        (2, 3, 2),
+        (2, 8, 4),
+    ]
+
+    invalid_model = SimpleNamespace(
+        config=SimpleNamespace(
+            text_config=SimpleNamespace(
+                num_hidden_layers=1,
+                layer_types=["sliding_attention"],
+                num_attention_heads=4,
+                num_key_value_heads=1,
+                num_global_key_value_heads=1,
+                hidden_size=8,
+                head_dim=2,
+                global_head_dim=4,
+                sliding_window=3,
+            )
+        ),
+        model=SimpleNamespace(
+            encoder=SimpleNamespace(
+                language_model=SimpleNamespace(layers=[SimpleNamespace(self_attn=Attention(1, 2, 8))])
+            )
+        ),
+    )
+    invalid_model.get_dummy_pkv_cache = get_dummy_pkv_cache
+    invalid_weight = invalid_model.model.encoder.language_model.layers[0].self_attn.k_proj.weight.detach().clone()
+
+    with pytest.raises(ValueError, match="invalid GQA geometry"):
+        example.replicate_kv_heads_diffusion_gemma(invalid_model, sliding_repeat=5)
+
+    assert torch.equal(invalid_model.model.encoder.language_model.layers[0].self_attn.k_proj.weight, invalid_weight)
+    assert invalid_model.config.text_config.num_key_value_heads == 1
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(example_path),
+            "--enable-blocking",
+            "--blocking-mode",
+            "hkv",
+            "--head-block-size",
+            "2",
+            "--num-kv-blocks",
+            "4",
+        ],
+    )
+    encoder_blocking_args = example.parse_args()
+    assert encoder_blocking_args.enable_blocking
+    assert encoder_blocking_args.blocking_mode == "hkv"
+    assert encoder_blocking_args.head_block_size == 2
+    assert encoder_blocking_args.num_kv_blocks == 4
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(example_path), "--enable-decoder-blocking", "--blocking-mode", "qkv", "--num-q-blocks", "2"],
+    )
+    decoder_blocking_args = example.parse_args()
+    assert decoder_blocking_args.enable_decoder_blocking
+    assert decoder_blocking_args.blocking_mode == "qkv"
+    assert decoder_blocking_args.num_q_blocks == 2
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(example_path),
+            "--enable-decoder-blocking",
+            "--blocking-mode",
+            "hqkv",
+            "--head-block-size",
+            "2",
+            "--num-kv-blocks",
+            "2",
+            "--num-q-blocks",
+            "4",
+        ],
+    )
+    decoder_hqkv_args = example.parse_args()
+    assert decoder_hqkv_args.enable_decoder_blocking
+    assert decoder_hqkv_args.blocking_mode == "hqkv"
+    assert decoder_hqkv_args.head_block_size == 2
+
+    captured_compile_kwargs = {}
+
+    def fake_load_model_and_processor(*args, **kwargs):
+        del args, kwargs
+        return None, SimpleNamespace(model=model)
+
+    def fake_compile_split_qpcs(*args, **kwargs):
+        del args
+        captured_compile_kwargs.update(kwargs)
+        return "encoder.qpc", "decoder.qpc"
+
+    monkeypatch.setattr(example, "load_model_and_processor", fake_load_model_and_processor)
+    monkeypatch.setattr(example, "compile_split_qpcs", fake_compile_split_qpcs)
+    monkeypatch.setattr(example, "prepare_prompt_inputs", lambda **kwargs: {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(example_path),
+            "--enable-blocking",
+            "--enable-decoder-blocking",
+            "--blocking-mode",
+            "hqkv",
+            "--head-block-size",
+            "2",
+            "--num-kv-blocks",
+            "2",
+            "--num-q-blocks",
+            "4",
+        ],
+    )
+    with pytest.raises(AttributeError, match="cloud_ai_100_diffusion_generate"):
+        example.main()
+
+    expected_blocking_config = {
+        "enable_blocking": True,
+        "blocking_mode": "hqkv",
+        "num_kv_blocks": 2,
+        "num_q_blocks": 4,
+        "head_block_size": 2,
+    }
+    assert captured_compile_kwargs["encoder_blocking_config"] == expected_blocking_config
+    assert captured_compile_kwargs["decoder_blocking_config"] == expected_blocking_config
+
+    monkeypatch.setattr(sys, "argv", [str(example_path), "--enable-decoder-blocking"])
+    with pytest.raises(ValueError, match="requires --blocking-mode qkv or hqkv"):
+        example.main()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(example_path), "--enable-decoder-blocking", "--blocking-mode", "hqkv"],
+    )
+    with pytest.raises(ValueError, match="requires explicit"):
+        example.main()
+
+
+def test_diffusion_gemma_single_example_replicates_kv_heads(monkeypatch):
+    import importlib.util
+    import sys
+
+    example_path = (
+        Path(__file__).resolve().parents[3]
+        / "examples/image_text_to_text/models/gemma_vision/diffusion_gemma"
+        / "diffusion_gemma_single_qpc_example.py"
+    )
+    module_name = "diffusion_gemma_single_qpc_example_test"
+    spec = importlib.util.spec_from_file_location(module_name, example_path)
+    example = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = example
+    assert spec.loader is not None
+    spec.loader.exec_module(example)
+
+    class Attention(nn.Module):
+        def __init__(self, num_kv_heads: int, head_dim: int, hidden_size: int):
+            super().__init__()
+            self.k_proj = nn.Linear(hidden_size, num_kv_heads * head_dim, bias=False)
+            self.v_proj = nn.Linear(hidden_size, num_kv_heads * head_dim, bias=False)
+            self.num_key_value_heads = num_kv_heads
+            self.num_key_value_groups = 4 // num_kv_heads
+
+    text_config = SimpleNamespace(
+        num_hidden_layers=2,
+        layer_types=["sliding_attention", "full_attention"],
+        num_attention_heads=4,
+        num_key_value_heads=1,
+        num_global_key_value_heads=None,
+        hidden_size=8,
+        head_dim=2,
+        global_head_dim=4,
+    )
+    sliding_attention = Attention(num_kv_heads=1, head_dim=2, hidden_size=8)
+    full_attention = Attention(num_kv_heads=1, head_dim=4, hidden_size=8)
+    with torch.no_grad():
+        sliding_attention.k_proj.weight.copy_(torch.arange(16, dtype=torch.float32).view(2, 8))
+        full_attention.k_proj.weight.copy_(torch.arange(32, dtype=torch.float32).view(4, 8))
+    model = SimpleNamespace(
+        config=SimpleNamespace(text_config=text_config),
+        model=SimpleNamespace(
+            encoder=SimpleNamespace(
+                language_model=SimpleNamespace(
+                    layers=[
+                        SimpleNamespace(self_attn=sliding_attention),
+                        SimpleNamespace(self_attn=full_attention),
+                    ]
+                )
+            )
+        ),
+    )
+    original_sliding_weight = sliding_attention.k_proj.weight.detach().clone()
+    original_full_weight = full_attention.k_proj.weight.detach().clone()
+
+    example.replicate_kv_heads_diffusion_gemma(model, sliding_repeat=2, full_repeat=2)
+
+    assert text_config.num_key_value_heads == 2
+    assert text_config.num_global_key_value_heads == 2
+    assert sliding_attention.num_key_value_groups == 2
+    assert full_attention.num_key_value_groups == 2
+    assert torch.equal(sliding_attention.k_proj.weight, torch.cat([original_sliding_weight] * 2, dim=0))
+    assert torch.equal(full_attention.k_proj.weight, torch.cat([original_full_weight] * 2, dim=0))
+
+    invalid_model = SimpleNamespace(
+        config=SimpleNamespace(
+            text_config=SimpleNamespace(
+                num_hidden_layers=1,
+                layer_types=["sliding_attention"],
+                num_attention_heads=4,
+                num_key_value_heads=1,
+                num_global_key_value_heads=1,
+                hidden_size=8,
+                head_dim=2,
+                global_head_dim=4,
+            )
+        ),
+        model=SimpleNamespace(
+            encoder=SimpleNamespace(
+                language_model=SimpleNamespace(layers=[SimpleNamespace(self_attn=Attention(1, 2, 8))])
+            )
+        ),
+    )
+    invalid_weight = invalid_model.model.encoder.language_model.layers[0].self_attn.k_proj.weight.detach().clone()
+
+    with pytest.raises(ValueError, match="invalid GQA geometry"):
+        example.replicate_kv_heads_diffusion_gemma(invalid_model, sliding_repeat=5)
+
+    assert torch.equal(invalid_model.model.encoder.language_model.layers[0].self_attn.k_proj.weight, invalid_weight)
+    assert invalid_model.config.text_config.num_key_value_heads == 1
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(example_path), "--sliding-kv-repeat", "2", "--full-kv-repeat", "4"],
+    )
+    args = example.parse_args()
+    assert args.sliding_kv_repeat == 2
+    assert args.full_kv_repeat == 4
